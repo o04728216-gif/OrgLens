@@ -1,0 +1,6 @@
+{
+  "name": "OrgLens Directory Explorer",
+  "description": "Modern glassy company employee directory explorer powered by public search indexing, real-time workforce analytics, customizable drag-and-drop dashboard widgets, and automatic offline sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "OrgLens Directory Explorer",
+  "short_name": "OrgLens",
+  "description": "Modern glassy company employee directory explorer with public search indexing, workforce charts, customizable widgets, and offline sync.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
