@@ -1,10 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowUpDown,
   Building2,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  ExternalLink,
   Globe2,
   Loader2,
   Search,
@@ -23,6 +26,8 @@ import type {
 } from '../types';
 import { truncateIndustry20 } from '../utils/emailFormulas';
 import { matchesGeographyFilter } from '../utils/geographyAndRevenue';
+import { copyTextToClipboard } from '../utils/offlineStorage';
+import { scrollToListTop } from '../utils/scrollUtils';
 
 interface IndustryTabProps {
   sessionMode: SessionMode;
@@ -115,9 +120,35 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   onSwitchSessionMode,
   onFocusDomainInput,
 }) => {
-  const [sortBy, setSortBy] = useState<'relevance' | 'name-asc' | 'location'>(
-    'relevance'
-  );
+  const [sortBy, setSortBy] = useState<
+    'relevance' | 'name-asc' | 'website-asc' | 'location'
+  >('relevance');
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [copiedAllCompaniesCount, setCopiedAllCompaniesCount] = useState<
+    number | null
+  >(null);
+  const [copiedAllWebsitesCount, setCopiedAllWebsitesCount] = useState<
+    number | null
+  >(null);
+  const [requestedPage, setRequestedPage] = useState<number | null>(null);
+  const listTopRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isFilterLoading && !globalDirectoryLoading) {
+      setRequestedPage(null);
+    }
+  }, [isFilterLoading, globalDirectoryLoading]);
+
+  const triggerRowCopy = async (key: string, value: string) => {
+    if (!value) return;
+    const ok = await copyTextToClipboard(value);
+    if (ok) {
+      setCopiedKey(key);
+      window.setTimeout(() => {
+        setCopiedKey((prev) => (prev === key ? null : prev));
+      }, 1800);
+    }
+  };
 
   // Active directory source in Filter Explorer Session
   const activeDirectorySource = useMemo(() => {
@@ -187,6 +218,12 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
     const sorted =
       sortBy === 'name-asc'
         ? [...list].sort((a, b) => a.name.localeCompare(b.name))
+        : sortBy === 'website-asc'
+        ? [...list].sort((a, b) =>
+            (a.domain || `${a.slug}.com`).localeCompare(
+              b.domain || `${b.slug}.com`
+            )
+          )
         : sortBy === 'location'
         ? [...list].sort((a, b) => a.location.localeCompare(b.location))
         : list;
@@ -254,6 +291,27 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   const isDirectoryBusy =
     (isFilterLoading && !filterResult) ||
     (globalDirectoryLoading && !activeDirectorySource);
+
+  const isPaginationLoading =
+    !isDirectoryBusy &&
+    (isFilterLoading || globalDirectoryLoading) &&
+    (requestedPage !== null ||
+      Boolean(
+        activeDirectorySource && activeDirectorySource.page !== globalPage
+      ));
+
+  const targetPaginationPage = requestedPage ?? globalPage;
+
+  const handleSelectPage = (nextPage: number) => {
+    const bounded = Math.max(1, Math.min(coherentTotalPages, nextPage));
+    if (bounded === globalPage && !isPaginationLoading) {
+      scrollToListTop(listTopRef.current);
+      return;
+    }
+    setRequestedPage(bounded);
+    scrollToListTop(listTopRef.current);
+    onChangeGlobalPage(bounded);
+  };
 
   // ==================== SESSION 1: DOMAIN LOOKUP INDUSTRY PROFILE ====================
   if (sessionMode === 'domain') {
@@ -470,7 +528,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
 
   // ==================== SESSION 2: FILTER EXPLORER WORLDWIDE COMPANIES ====================
   return (
-    <div className="space-y-4">
+    <div ref={listTopRef} className="space-y-4 scroll-mt-24">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/80 dark:border-slate-800/80">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white min-w-0">
           <Globe2 className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0" />
@@ -479,9 +537,11 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
 
         <div className="flex flex-wrap items-center gap-3 text-xs shrink-0">
           {(isFilterLoading || globalDirectoryLoading) && (
-            <span className="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400 font-medium">
+            <span className="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400 font-semibold">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Updating...
+              {isPaginationLoading
+                ? `Loading page ${targetPaginationPage.toLocaleString()}...`
+                : 'Updating...'}
             </span>
           )}
 
@@ -501,7 +561,11 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
               value={sortBy}
               onChange={(e) =>
                 setSortBy(
-                  e.target.value as 'relevance' | 'name-asc' | 'location'
+                  e.target.value as
+                    | 'relevance'
+                    | 'name-asc'
+                    | 'website-asc'
+                    | 'location'
                 )
               }
               aria-label="Sort companies"
@@ -509,11 +573,94 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
             >
               <option value="relevance">Relevance</option>
               <option value="name-asc">Company Name (A–Z)</option>
+              <option value="website-asc">Website (A–Z)</option>
               <option value="location">City, State / Country</option>
             </select>
           </div>
         </div>
       </div>
+
+      {/* Copy-First Bulk Toolbar: Copy Company List / Website Links before clicking into any company */}
+      {filteredGlobalCompanies.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                const text = filteredGlobalCompanies
+                  .map((c) => c.name)
+                  .join('\n');
+                const ok = await copyTextToClipboard(text);
+                if (ok) {
+                  setCopiedAllCompaniesCount(filteredGlobalCompanies.length);
+                  window.setTimeout(
+                    () => setCopiedAllCompaniesCount(null),
+                    2400
+                  );
+                }
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                copiedAllCompaniesCount !== null
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-sky-600 hover:bg-sky-500 text-white shadow-xs'
+              }`}
+            >
+              {copiedAllCompaniesCount !== null ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  Copied {copiedAllCompaniesCount.toLocaleString()} Companies
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy Company List ({filteredGlobalCompanies.length.toLocaleString()})
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                const text = filteredGlobalCompanies
+                  .map(
+                    (c) =>
+                      c.websiteUrl || `https://${c.domain || `${c.slug}.com`}`
+                  )
+                  .join('\n');
+                const ok = await copyTextToClipboard(text);
+                if (ok) {
+                  setCopiedAllWebsitesCount(filteredGlobalCompanies.length);
+                  window.setTimeout(
+                    () => setCopiedAllWebsitesCount(null),
+                    2400
+                  );
+                }
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                copiedAllWebsitesCount !== null
+                  ? 'border-emerald-600 bg-emerald-600 text-white'
+                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700'
+              }`}
+            >
+              {copiedAllWebsitesCount !== null ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  Copied {copiedAllWebsitesCount.toLocaleString()} Websites
+                </>
+              ) : (
+                <>
+                  <Globe2 className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
+                  Copy Website List ({filteredGlobalCompanies.length.toLocaleString()})
+                </>
+              )}
+            </button>
+          </div>
+
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            Copy any company or website first, or click a company name to view Full Names &amp; Emails
+          </span>
+        </div>
+      )}
 
       {/* Quick Industry Selector Strip */}
       {topIndustriesQuickBar.length > 0 && (
@@ -571,6 +718,25 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
         </div>
       )}
 
+      {isPaginationLoading && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl border border-sky-500/40 bg-sky-500/10 dark:bg-sky-500/15 text-xs font-semibold text-sky-800 dark:text-sky-200"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
+            <span>
+              Loading page {targetPaginationPage.toLocaleString()} of{' '}
+              {coherentTotalPages.toLocaleString()}...
+            </span>
+          </span>
+          <span className="font-mono tabular-nums text-[11px] text-sky-700/85 dark:text-sky-300/85">
+            Fetching next 500 companies &amp; verified websites
+          </span>
+        </div>
+      )}
+
       {/* Worldwide Companies HTML <table> */}
       {isDirectoryBusy ? (
         <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80">
@@ -587,8 +753,23 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/65 dark:bg-slate-950/40">
-          <table className="w-full text-left border-collapse">
+        <div className="relative rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/65 dark:bg-slate-950/40">
+          {isPaginationLoading && (
+            <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex justify-center px-4">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl backdrop-blur-md bg-white/95 dark:bg-slate-900/95 border border-sky-500/40 shadow-sm text-xs font-semibold text-slate-900 dark:text-white">
+                <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
+                <span>
+                  Loading page {targetPaginationPage.toLocaleString()}...
+                </span>
+              </div>
+            </div>
+          )}
+          <div
+            className={`overflow-x-auto rounded-xl transition-opacity duration-150 ${
+              isPaginationLoading ? 'opacity-45 pointer-events-none' : 'opacity-100'
+            }`}
+          >
+            <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/80 dark:bg-slate-900/80 text-xs font-semibold text-slate-600 dark:text-slate-300">
                 <th scope="col" className="py-3 px-4 whitespace-nowrap">
@@ -602,6 +783,20 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                     className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-white cursor-pointer"
                   >
                     <span>Company Name</span>
+                    <ArrowUpDown className="h-3 w-3 opacity-60" />
+                  </button>
+                </th>
+                <th scope="col" className="py-3 px-4 whitespace-nowrap">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSortBy((s) =>
+                        s === 'website-asc' ? 'relevance' : 'website-asc'
+                      )
+                    }
+                    className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+                  >
+                    <span>Website</span>
                     <ArrowUpDown className="h-3 w-3 opacity-60" />
                   </button>
                 </th>
@@ -638,115 +833,224 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                   scope="col"
                   className="py-3 px-4 text-right whitespace-nowrap"
                 >
-                  Domain Lookup
+                  Names &amp; Emails
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm">
-              {filteredGlobalCompanies.map((comp) => (
-                <tr
-                  key={comp.id}
-                  onClick={() => onSelectGlobalCompany(comp)}
-                  className="hover:bg-sky-500/[0.05] dark:hover:bg-sky-400/[0.06] transition-colors duration-150 cursor-pointer"
-                >
-                  <td className="py-2.5 px-4 whitespace-nowrap">
-                    <div className="flex items-center gap-3">
-                      <CompanyLogoAvatar
-                        name={comp.name}
-                        logoUrl={comp.logoUrl}
-                      />
-                      <span className="font-semibold text-slate-900 dark:text-slate-100">
-                        {comp.name}
-                      </span>
-                    </div>
-                  </td>
+              {filteredGlobalCompanies.map((comp) => {
+                const companyDomain = comp.domain || `${comp.slug}.com`;
+                const websiteHref =
+                  comp.websiteUrl || `https://${companyDomain}`;
+                const nameCopyId = `name:${comp.id}`;
+                const webCopyId = `web:${comp.id}`;
+                const isNameCopied = copiedKey === nameCopyId;
+                const isWebCopied = copiedKey === webCopyId;
 
-                  <td className="py-2.5 px-4 text-xs sm:text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                    {comp.location}
-                  </td>
-
-                  <td
-                    className="py-2.5 px-4 text-xs sm:text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap"
-                    title={comp.industry}
+                return (
+                  <tr
+                    key={comp.id}
+                    className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
                   >
-                    <span className="block whitespace-nowrap truncate">
-                      {truncateIndustry20(comp.industry)}
-                    </span>
-                  </td>
+                    {/* Company Name: Copy-first button + Click Company Name to open Full Names & Emails */}
+                    <td className="py-2.5 px-4 whitespace-nowrap">
+                      <div className="flex items-center gap-2.5">
+                        <CompanyLogoAvatar
+                          name={comp.name}
+                          logoUrl={comp.logoUrl}
+                        />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void triggerRowCopy(nameCopyId, comp.name);
+                          }}
+                          title={`Copy "${comp.name}" first`}
+                          aria-label={`Copy company name ${comp.name}`}
+                          className={`inline-flex items-center justify-center h-6 w-6 rounded-md border transition-colors cursor-pointer shrink-0 ${
+                            isNameCopied
+                              ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                              : 'border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 hover:border-sky-500/40'
+                          }`}
+                        >
+                          {isNameCopied ? (
+                            <Check className="h-3 w-3" />
+                          ) : (
+                            <Copy className="h-3 w-3" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const selectedText = window
+                              .getSelection()
+                              ?.toString()
+                              .trim();
+                            if (selectedText) return;
+                            onSelectGlobalCompany(comp);
+                          }}
+                          title={`Click to view all Full Names & Emails at ${comp.name}`}
+                          className="font-semibold text-left text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 hover:underline underline-offset-4 transition-colors cursor-pointer select-text"
+                        >
+                          {comp.name}
+                        </button>
+                      </div>
+                    </td>
 
-                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-nowrap">
-                    {comp.employeeRange}
-                  </td>
+                    {/* Website Link: Copy-first button + External Website Link */}
+                    <td className="py-2.5 px-4 whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1.5 font-mono text-xs">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void triggerRowCopy(webCopyId, websiteHref);
+                          }}
+                          title={`Copy ${websiteHref} first`}
+                          aria-label={`Copy website link ${websiteHref}`}
+                          className={`inline-flex items-center justify-center h-6 w-6 rounded-md border transition-colors cursor-pointer shrink-0 ${
+                            isWebCopied
+                              ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                              : 'border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 hover:border-sky-500/40'
+                          }`}
+                        >
+                          {isWebCopied ? (
+                            <Check className="h-3 w-3" />
+                          ) : (
+                            <Copy className="h-3 w-3" />
+                          )}
+                        </button>
+                        <a
+                          href={websiteHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => {
+                            const selectedText = window
+                              .getSelection()
+                              ?.toString()
+                              .trim();
+                            if (selectedText) {
+                              e.preventDefault();
+                            }
+                          }}
+                          title={`Visit ${websiteHref}`}
+                          className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 hover:text-sky-500 dark:hover:text-sky-300 hover:underline underline-offset-4 select-text"
+                        >
+                          <span>{companyDomain}</span>
+                          <ExternalLink className="h-3 w-3 opacity-75 shrink-0" />
+                        </a>
+                      </div>
+                    </td>
 
-                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-xs sm:text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                    {comp.revenueRange}
-                  </td>
+                    <td className="py-2.5 px-4 text-xs sm:text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                      {comp.location}
+                    </td>
 
-                  <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectGlobalCompany(comp);
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-500/10 hover:bg-sky-600 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+                    <td
+                      className="py-2.5 px-4 text-xs sm:text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap"
+                      title={comp.industry}
                     >
-                      <Users className="h-3.5 w-3.5" />
-                      <span>Open Full Roster</span>
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                      <span className="block whitespace-nowrap truncate">
+                        {truncateIndustry20(comp.industry)}
+                      </span>
+                    </td>
+
+                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-nowrap">
+                      {comp.employeeRange}
+                    </td>
+
+                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-xs sm:text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                      {comp.revenueRange}
+                    </td>
+
+                    <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => onSelectGlobalCompany(comp)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-500/10 hover:bg-sky-600 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <Users className="h-3.5 w-3.5" />
+                        <span>View Emails</span>
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
       {/* Numbered Pagination (< 1 2 3 4 5 6 7 8 9 >) */}
-      {activeDirectorySource && activeDirectorySource.totalPages > 1 && (
-        <div className="pt-2 flex items-center justify-center gap-1 flex-wrap">
-          <button
-            type="button"
-            disabled={globalPage <= 1 || isFilterLoading || globalDirectoryLoading}
-            onClick={() => onChangeGlobalPage(globalPage - 1)}
-            aria-label="Previous page"
-            className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
+      {activeDirectorySource && coherentTotalPages > 1 && (
+        <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+            {isPaginationLoading ? (
+              <span className="inline-flex items-center gap-1.5 font-sans font-semibold text-sky-600 dark:text-sky-400">
+                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                Loading page {targetPaginationPage.toLocaleString()} of{' '}
+                {coherentTotalPages.toLocaleString()}...
+              </span>
+            ) : (
+              <span>
+                Page {globalPage.toLocaleString()} of{' '}
+                {coherentTotalPages.toLocaleString()} · 500/page
+              </span>
+            )}
+          </div>
 
-          {visiblePageNumbers.map((p) => {
-            const active = p === globalPage;
-            return (
-              <button
-                key={p}
-                type="button"
-                disabled={isFilterLoading || globalDirectoryLoading}
-                onClick={() => onChangeGlobalPage(p)}
-                className={`inline-flex items-center justify-center h-8 min-w-8 px-2 rounded-lg text-xs font-mono tabular-nums font-semibold border transition-colors cursor-pointer ${
-                  active
-                    ? 'border-sky-600 bg-sky-50 dark:bg-sky-500/20 text-sky-700 dark:text-sky-300'
-                    : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                {p}
-              </button>
-            );
-          })}
+          <div className="flex items-center justify-center sm:justify-end gap-1 flex-wrap">
+            <button
+              type="button"
+              disabled={
+                globalPage <= 1 || isFilterLoading || globalDirectoryLoading
+              }
+              onClick={() => handleSelectPage(globalPage - 1)}
+              aria-label="Previous page"
+              className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
 
-          <button
-            type="button"
-            disabled={
-              globalPage >= activeDirectorySource.totalPages ||
-              isFilterLoading ||
-              globalDirectoryLoading
-            }
-            onClick={() => onChangeGlobalPage(globalPage + 1)}
-            aria-label="Next page"
-            className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
+            {visiblePageNumbers.map((p) => {
+              const active = p === globalPage;
+              const isTargetLoading =
+                isPaginationLoading && p === targetPaginationPage;
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  disabled={isFilterLoading || globalDirectoryLoading}
+                  onClick={() => handleSelectPage(p)}
+                  className={`inline-flex items-center justify-center gap-1.5 h-8 min-w-8 px-2 rounded-lg text-xs font-mono tabular-nums font-semibold border transition-colors cursor-pointer ${
+                    active || isTargetLoading
+                      ? 'border-sky-600 bg-sky-600 text-white shadow-xs'
+                      : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {isTargetLoading && (
+                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                  )}
+                  <span>{p}</span>
+                </button>
+              );
+            })}
+
+            <button
+              type="button"
+              disabled={
+                globalPage >= coherentTotalPages ||
+                isFilterLoading ||
+                globalDirectoryLoading
+              }
+              onClick={() => handleSelectPage(globalPage + 1)}
+              aria-label="Next page"
+              className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       )}
     </div>

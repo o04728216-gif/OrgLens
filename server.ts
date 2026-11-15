@@ -47,6 +47,10 @@ interface CacheEntry<T> {
 
 const domainCache = new Map<string, CacheEntry<SearchResponse>>();
 const slugToDomainCache = new Map<string, string>();
+const slugToWebsiteCache = new Map<
+  string,
+  { domain: string; websiteUrl: string }
+>();
 const industryCompaniesCache = new Map<string, CacheEntry<GlobalCompaniesResponse>>();
 const countryCompaniesCache = new Map<string, CacheEntry<GlobalCompaniesResponse>>();
 const quickRosterCache = new Map<string, CacheEntry<EmployeeRecord[]>>();
@@ -1305,6 +1309,10 @@ async function fetchFullTheOrgCompany(
 
     if (canonicalSlug && isValidDomain(resolvedDomain)) {
       slugToDomainCache.set(canonicalSlug, resolvedDomain);
+      slugToWebsiteCache.set(canonicalSlug, {
+        domain: resolvedDomain,
+        websiteUrl: `https://${resolvedDomain}`,
+      });
     }
 
     if (!skipDomainGuard && domain) {
@@ -2040,10 +2048,31 @@ function mapRawTheOrgCompany(
   );
   const revenueRange = estimateCompanyRevenueRange(employeeRange, name);
 
+  const rawExts = Array.isArray(c.extensions) ? c.extensions : [];
+  const parsedExts = rawExts
+    .map((e: unknown) => normalizeDomain(String(e)))
+    .filter((d) => isValidDomain(d));
+  const rawSocial = c.social as { websiteUrl?: string } | undefined;
+  const socialDomain = rawSocial?.websiteUrl
+    ? normalizeDomain(String(rawSocial.websiteUrl))
+    : '';
+  const directDomain =
+    (isValidDomain(socialDomain) ? socialDomain : '') || parsedExts[0] || '';
+  if (slug && directDomain) {
+    slugToDomainCache.set(slug, directDomain);
+    slugToWebsiteCache.set(slug, {
+      domain: directDomain,
+      websiteUrl: `https://${directDomain}`,
+    });
+  }
+  const cachedWeb = slug ? slugToWebsiteCache.get(slug) : undefined;
+
   return {
     id: String(c.id || slug),
     slug,
     name,
+    domain: cachedWeb?.domain,
+    websiteUrl: cachedWeb?.websiteUrl,
     logoUrl,
     location,
     industry,
@@ -2054,6 +2083,105 @@ function mapRawTheOrgCompany(
       ? [meta.sourceIndustrySlug]
       : undefined,
   };
+}
+
+function buildFallbackDomainFromSlug(slug: string, name: string): string {
+  const cleanedSlug = slug
+    .toLowerCase()
+    .replace(/-\d+$/, '')
+    .replace(/-(inc|llc|ltd|corp|corporation|plc|gmbh|ag|sa|bv|pty|co|group|global|holdings)$/i, '')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/^-+|-+$/g, '');
+  if (cleanedSlug && cleanedSlug.length >= 2) {
+    return `${cleanedSlug}.com`;
+  }
+  const fromName = slugifyName(name).replace(/^-+|-+$/g, '');
+  return `${fromName || 'company'}.com`;
+}
+
+async function enrichCompaniesWithWebsites(
+  companies: GlobalCompanyItem[]
+): Promise<GlobalCompanyItem[]> {
+  if (companies.length === 0) return companies;
+
+  const missingSlugs = Array.from(
+    new Set(
+      companies
+        .map((c) => c.slug.trim().toLowerCase())
+        .filter((s) => s && !slugToWebsiteCache.has(s))
+    )
+  );
+
+  if (missingSlugs.length > 0) {
+    const BATCH_SIZE = 90;
+    const chunks: string[][] = [];
+    for (let i = 0; i < missingSlugs.length; i += BATCH_SIZE) {
+      chunks.push(missingSlugs.slice(i, i + BATCH_SIZE));
+    }
+
+    await mapWithConcurrency(chunks, 6, async (chunk) => {
+      const aliasFields = chunk
+        .map(
+          (s, idx) =>
+            `c${idx}: company(slug: ${JSON.stringify(s)}) { slug extensions social { websiteUrl } }`
+        )
+        .join('\n');
+      const data = await queryTheOrgGraphQL<
+        Record<
+          string,
+          {
+            slug?: string;
+            extensions?: string[];
+            social?: { websiteUrl?: string };
+          } | null
+        >
+      >(`query {\n${aliasFields}\n}`, {}, 5500);
+
+      if (!data) return;
+
+      chunk.forEach((reqSlug, idx) => {
+        const node = data[`c${idx}`];
+        if (!node) return;
+        const exts = Array.isArray(node.extensions)
+          ? node.extensions
+              .map((e) => normalizeDomain(String(e)))
+              .filter((d) => isValidDomain(d))
+          : [];
+        const rawUrl = cleanWhitespace(String(node.social?.websiteUrl || ''));
+        const webDom = rawUrl ? normalizeDomain(rawUrl) : '';
+        const bestDomain =
+          (isValidDomain(webDom) ? webDom : '') || exts[0] || '';
+        if (bestDomain) {
+          slugToDomainCache.set(reqSlug, bestDomain);
+          slugToWebsiteCache.set(reqSlug, {
+            domain: bestDomain,
+            websiteUrl: `https://${bestDomain}`,
+          });
+        }
+      });
+    });
+  }
+
+  return companies.map((comp) => {
+    const key = comp.slug.trim().toLowerCase();
+    const cached = slugToWebsiteCache.get(key);
+    if (cached) {
+      return {
+        ...comp,
+        domain: cached.domain,
+        websiteUrl: cached.websiteUrl,
+      };
+    }
+    const fallbackDomain =
+      comp.domain && isValidDomain(comp.domain)
+        ? comp.domain
+        : buildFallbackDomainFromSlug(comp.slug, comp.name);
+    return {
+      ...comp,
+      domain: fallbackDomain,
+      websiteUrl: `https://${fallbackDomain}`,
+    };
+  });
 }
 
 async function fetchGlobalCompaniesByIndustry(
@@ -3155,6 +3283,10 @@ async function startServer() {
             )
           );
 
+    const enrichedPageCompanies = await enrichCompaniesWithWebsites(
+      pageCompanies
+    );
+
     return {
       industrySlug: slugIdentifier,
       industryFullTitle: displayTitle || 'Worldwide Directory',
@@ -3162,7 +3294,7 @@ async function startServer() {
       perPage: COMPANIES_PER_PAGE,
       totalCompanies: accurateTotalCompanies,
       totalPages,
-      companies: pageCompanies,
+      companies: enrichedPageCompanies,
     };
   }
 
@@ -3299,10 +3431,18 @@ async function startServer() {
       const hasVerifiedExt = extensions.some((d) => isValidDomain(d));
       const resolvedDomain =
         extensions.find((d) => isValidDomain(d)) ||
-        (isValidDomain(websiteDomain) ? websiteDomain : `${slug}.com`);
+        (isValidDomain(websiteDomain)
+          ? websiteDomain
+          : comp.domain && isValidDomain(comp.domain)
+          ? comp.domain
+          : buildFallbackDomainFromSlug(slug, comp.name));
 
       if (isValidDomain(resolvedDomain)) {
         slugToDomainCache.set(slug, resolvedDomain);
+        slugToWebsiteCache.set(slug, {
+          domain: resolvedDomain,
+          websiteUrl: `https://${resolvedDomain}`,
+        });
       }
 
       const resolvedCompanyName =

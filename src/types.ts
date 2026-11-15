@@ -88,6 +88,8 @@ export interface GlobalCompanyItem {
   id: string;
   slug: string;
   name: string;
+  domain?: string;
+  websiteUrl?: string;
   logoUrl: string | null;
   location: string;
   industry: string;

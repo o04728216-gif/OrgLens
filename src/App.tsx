@@ -4,9 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   Building2,
-  Check,
   CloudOff,
-  Copy,
   Crown,
   Eye,
   EyeOff,
@@ -39,7 +37,6 @@ import type {
 } from './types';
 import {
   DEFAULT_WIDGETS,
-  copyTextToClipboard,
   loadSavedTheme,
   loadSnapshots,
   loadSyncQueue,
@@ -62,6 +59,7 @@ import {
 } from './components/FilterSidebar';
 import { applyExcelEmailFormula } from './utils/emailFormulas';
 import { usePWAInstall } from './hooks/usePWAInstall';
+import { scrollToListTop } from './utils/scrollUtils';
 
 const INITIAL_SIDEBAR_FILTERS: SidebarFiltersState = {
   contactSearch: '',
@@ -196,6 +194,17 @@ export default function App() {
   const [isFilterLoading, setIsFilterLoading] = useState(false);
   const [globalPage, setGlobalPage] = useState(1);
 
+  // Selected Company drilldown inside Filter Explorer (stays inside Filter Explorer!)
+  const [filterSelectedCompany, setFilterSelectedCompany] =
+    useState<GlobalCompanyItem | null>(null);
+  const [filterCompanyResult, setFilterCompanyResult] =
+    useState<SearchResponse | null>(null);
+  const [isFilterCompanyLoading, setIsFilterCompanyLoading] = useState(false);
+  const [filterCompanyError, setFilterCompanyError] = useState<string | null>(
+    null
+  );
+  const filterCompanyAbortRef = useRef<AbortController | null>(null);
+
   // Domain Lookup Session state — completely empty on boot (zero autofill!)
   const [domainInput, setDomainInput] = useState('');
   const [snapshots, setSnapshots] = useState<Record<string, SearchResponse>>(() =>
@@ -205,7 +214,6 @@ export default function App() {
 
   const [isDomainLoading, setIsDomainLoading] = useState(false);
   const [loadingDomain, setLoadingDomain] = useState('');
-  const [headerCopied, setHeaderCopied] = useState(false);
   const [statusBanner, setStatusBanner] = useState<{
     tone: 'info' | 'warning' | 'error' | 'success';
     text: string;
@@ -242,6 +250,7 @@ export default function App() {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const resultsTopRef = useRef<HTMLDivElement>(null);
   const { isInstallable, install } = usePWAInstall();
 
   useEffect(() => {
@@ -449,7 +458,17 @@ export default function App() {
   const handleChangeFilters = useCallback(
     (updater: (prev: SidebarFiltersState) => SidebarFiltersState) => {
       setFilters(updater);
-      setSessionMode('filter');
+      filterCompanyAbortRef.current?.abort();
+      setIsFilterCompanyLoading(false);
+      setFilterSelectedCompany(null);
+      setFilterCompanyResult(null);
+      setFilterCompanyError(null);
+      setSessionMode((prevMode) => {
+        if (prevMode !== 'filter') {
+          setActiveTab('industry');
+        }
+        return 'filter';
+      });
       setFilterSelectedDepartment('All');
       setFilterSelectedSeniority('All');
       setGlobalPage(1);
@@ -548,6 +567,9 @@ export default function App() {
   // Synthesize AnalyticsWidget view for whichever session is active
   const activeAnalyticsResult = useMemo<SearchResponse | null>(() => {
     if (sessionMode === 'domain') return currentDomainResult;
+    if (filterSelectedCompany && filterCompanyResult) {
+      return filterCompanyResult;
+    }
     if (!filterExplorerResult || activeFilteredContacts.length === 0) return null;
     return {
       domain: 'filter-explorer',
@@ -580,29 +602,12 @@ export default function App() {
   }, [
     sessionMode,
     currentDomainResult,
+    filterSelectedCompany,
+    filterCompanyResult,
     filterExplorerResult,
     activeFilteredContacts,
     filters.emailFormulaOverride,
   ]);
-
-  const activeSessionContactsForHeaderCopy = useMemo(() => {
-    if (sessionMode === 'domain') {
-      return currentDomainResult ? currentDomainResult.employees : [];
-    }
-    return activeFilteredContacts;
-  }, [sessionMode, currentDomainResult, activeFilteredContacts]);
-
-  const handleCopyAllNames = async () => {
-    if (activeSessionContactsForHeaderCopy.length === 0) return;
-    const listText = activeSessionContactsForHeaderCopy
-      .map((emp) => emp.fullName)
-      .join('\n');
-    const ok = await copyTextToClipboard(listText);
-    if (ok) {
-      setHeaderCopied(true);
-      window.setTimeout(() => setHeaderCopied(false), 2500);
-    }
-  };
 
   const queueDomainOffline = useCallback((domain: string) => {
     setSyncQueue((prev) => {
@@ -853,20 +858,124 @@ export default function App() {
       ...prev,
       selectedIndustrySlugs: nextSlugs,
     }));
-    setSessionMode('filter');
+    filterCompanyAbortRef.current?.abort();
+    setIsFilterCompanyLoading(false);
+    setFilterSelectedCompany(null);
+    setFilterCompanyResult(null);
+    setFilterCompanyError(null);
+    setSessionMode((prevMode) => {
+      if (prevMode !== 'filter') {
+        setActiveTab('industry');
+      }
+      return 'filter';
+    });
     setFilterSelectedDepartment('All');
     setFilterSelectedSeniority('All');
     setGlobalPage(1);
   }, []);
 
-  // Clicking a company in Filter Explorer Worldwide Directory -> Opens full roster in Domain Lookup Session!
+  const handleBackToCompaniesList = useCallback(() => {
+    filterCompanyAbortRef.current?.abort();
+    setIsFilterCompanyLoading(false);
+    setFilterSelectedCompany(null);
+    setFilterCompanyResult(null);
+    setFilterCompanyError(null);
+    setSessionMode('filter');
+    setActiveTab('industry');
+    scrollToListTop(resultsTopRef.current);
+  }, []);
+
+  // Clicking a company in Filter Explorer -> Views the whole Full Names & Emails right under Filter Explorer!
   const handleSelectGlobalCompany = useCallback(
-    (company: GlobalCompanyItem) => {
-      setSessionMode('domain');
+    async (company: GlobalCompanyItem) => {
+      filterCompanyAbortRef.current?.abort();
+      setSessionMode('filter');
       setActiveTab('full-names-emails');
-      void executeDomainLookup('', false, company.slug, company.name);
+      setFilterSelectedDepartment('All');
+      setFilterSelectedSeniority('All');
+      setFilterSelectedCompany(company);
+      setFilterCompanyError(null);
+      scrollToListTop(resultsTopRef.current);
+
+      const cleanDom = company.domain
+        ? sanitizeClientDomain(company.domain)
+        : '';
+      const cachedSnapshot =
+        (cleanDom && snapshots[cleanDom]?.employees?.length
+          ? snapshots[cleanDom]
+          : undefined) ||
+        Object.values(snapshots).find(
+          (s) => s.companySlug === company.slug && s.employees.length > 0
+        );
+
+      if (cachedSnapshot) {
+        setFilterCompanyResult(cachedSnapshot);
+        setIsFilterCompanyLoading(false);
+        return;
+      }
+
+      if (effectiveOffline) {
+        if (cleanDom) {
+          queueDomainOffline(cleanDom);
+        }
+        setFilterCompanyResult(null);
+        setIsFilterCompanyLoading(false);
+        setFilterCompanyError(
+          `You are currently offline. Reconnect to fetch full names and emails for ${company.name}.`
+        );
+        return;
+      }
+
+      const controller = new AbortController();
+      filterCompanyAbortRef.current = controller;
+      setFilterCompanyResult(null);
+      setIsFilterCompanyLoading(true);
+
+      try {
+        const queryParams = new URLSearchParams();
+        if (cleanDom) queryParams.set('domain', cleanDom);
+        if (company.slug) queryParams.set('companySlug', company.slug);
+
+        const res = await fetch(`/api/search?${queryParams.toString()}`, {
+          signal: controller.signal,
+        });
+        const payload = await res.json();
+        if (!res.ok) {
+          throw new Error(
+            payload?.error || 'Failed to load company contacts.'
+          );
+        }
+
+        const data = payload as SearchResponse;
+        if (!controller.signal.aborted) {
+          setFilterCompanyResult(data);
+          if (data.domain && data.employees.length > 0) {
+            setSnapshots((prev) => ({
+              ...prev,
+              [data.domain]: data,
+            }));
+          }
+          if (data.employees.length === 0) {
+            setFilterCompanyError(
+              `No public employee records were indexed for ${company.name}.`
+            );
+          }
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setFilterCompanyError(
+            err instanceof Error
+              ? err.message
+              : `Unable to load contacts for ${company.name}.`
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsFilterCompanyLoading(false);
+        }
+      }
     },
-    [executeDomainLookup]
+    [effectiveOffline, queueDomainOffline, snapshots]
   );
 
   // Uploading a list of domains from Sidebar -> Opens in Domain Lookup Session
@@ -969,6 +1078,10 @@ export default function App() {
         ? currentDomainResult
           ? currentDomainResult.employees.length.toLocaleString()
           : undefined
+        : filterSelectedCompany
+        ? filterCompanyResult
+          ? filterCompanyResult.employees.length.toLocaleString()
+          : undefined
         : filterExplorerResult
         ? activeTotalMatchedContacts.toLocaleString()
         : undefined,
@@ -983,6 +1096,10 @@ export default function App() {
         ? currentDomainResult
           ? `${currentDomainResult.employees.length.toLocaleString()} Roles`
           : undefined
+        : filterSelectedCompany
+        ? filterCompanyResult
+          ? `${filterCompanyResult.employees.length.toLocaleString()} Roles`
+          : undefined
         : filterExplorerResult
         ? `${activeTotalMatchedContacts.toLocaleString()} Roles`
         : undefined,
@@ -990,7 +1107,7 @@ export default function App() {
 
   const industryTab = {
     id: 'industry' as PrimaryTab,
-    label: 'Industry',
+    label: sessionMode === 'filter' ? 'Companies' : 'Industry',
     icon: Building2,
     badge:
       sessionMode === 'domain'
@@ -1002,7 +1119,7 @@ export default function App() {
         : undefined,
   };
 
-  // Under Filter Explorer: Industry tab is in the middle!
+  // Under Filter Explorer: Companies tab is on the LEFT!
   const primaryTabs: Array<{
     id: PrimaryTab;
     label: string;
@@ -1010,7 +1127,7 @@ export default function App() {
     badge?: string;
   }> =
     sessionMode === 'filter'
-      ? [fullNamesTab, industryTab, commandHierarchyTab]
+      ? [industryTab, fullNamesTab, commandHierarchyTab]
       : [fullNamesTab, commandHierarchyTab, industryTab];
 
   return (
@@ -1048,7 +1165,13 @@ export default function App() {
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => {
+                  if (sessionMode === 'filter' && tab.id === 'industry') {
+                    handleBackToCompaniesList();
+                    return;
+                  }
+                  setActiveTab(tab.id);
+                }}
                 className={`underline-offset-4 hover:underline transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   activeTab === tab.id
                     ? 'text-slate-900 dark:text-white font-semibold underline'
@@ -1071,41 +1194,43 @@ export default function App() {
             </button>
           </nav>
 
-          {/* Zone 3: Single Primary Action -> Copy Full Name List */}
+          {/* Zone 3: Single Contextual Primary Action -> Worldwide Explorer / Lookup Domain */}
           <div className="flex items-center shrink-0">
-            {activeSessionContactsForHeaderCopy.length > 0 ? (
+            {sessionMode === 'domain' ? (
               <button
                 type="button"
-                onClick={() => void handleCopyAllNames()}
-                className={`inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 text-xs font-semibold rounded-lg shadow-xs transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
-                  headerCopied
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-sky-600 hover:bg-sky-500 text-white'
-                }`}
+                onClick={() => {
+                  if (!filterSelectedCompany) {
+                    setActiveTab('industry');
+                  }
+                  setSessionMode('filter');
+                  scrollToListTop(resultsTopRef.current);
+                }}
+                className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 text-xs font-semibold rounded-lg bg-sky-600 hover:bg-sky-500 text-white shadow-xs transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                {headerCopied ? (
-                  <>
-                    <Check className="h-3.5 w-3.5" />
-                    Copied {activeSessionContactsForHeaderCopy.length.toLocaleString()} Names!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5" />
-                    Copy Full Name List ({activeSessionContactsForHeaderCopy.length.toLocaleString()})
-                  </>
-                )}
+                <Globe className="h-3.5 w-3.5" />
+                <span>
+                  Worldwide Explorer
+                  {filterExplorerResult
+                    ? ` (${filterExplorerResult.totalMatchedCompanies.toLocaleString()} Orgs)`
+                    : ''}
+                </span>
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => {
                   setSessionMode('domain');
-                  searchInputRef.current?.focus();
+                  setActiveTab('full-names-emails');
+                  scrollToListTop(searchInputRef.current, 110);
+                  window.setTimeout(() => {
+                    searchInputRef.current?.focus();
+                  }, 120);
                 }}
                 className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 text-xs font-semibold rounded-lg bg-sky-600 hover:bg-sky-500 text-white shadow-xs transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Search className="h-3.5 w-3.5" />
-                Lookup Domain
+                <span>Lookup Domain</span>
               </button>
             )}
           </div>
@@ -1123,16 +1248,27 @@ export default function App() {
           onChangeFilters={handleChangeFilters}
           onResetFilters={() => {
             setFilters(INITIAL_SIDEBAR_FILTERS);
+            filterCompanyAbortRef.current?.abort();
+            setIsFilterCompanyLoading(false);
+            setFilterSelectedCompany(null);
+            setFilterCompanyResult(null);
+            setFilterCompanyError(null);
             setFilterSelectedDepartment('All');
             setFilterSelectedSeniority('All');
             setGlobalPage(1);
             setSessionMode('filter');
+            setActiveTab('industry');
           }}
           globalIndustries={globalIndustries}
           industriesLoading={industriesLoading}
           onSelectIndustryFilter={handleSelectIndustryFilter}
           onActivateCompanyDirectory={() => {
-            setSessionMode('filter');
+            setSessionMode((prev) => {
+              if (prev !== 'filter') {
+                setActiveTab('industry');
+              }
+              return 'filter';
+            });
           }}
           onDomainDirectLookup={(d) => {
             setSessionMode('domain');
@@ -1161,16 +1297,13 @@ export default function App() {
         <main className="flex-1 min-w-0 space-y-5">
           {/* Domain Search & Utility Controls */}
           <section className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/70 border border-slate-200/85 dark:border-slate-800/85 p-4 sm:p-7 shadow-xs">
-            <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4">
+            <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
               <div className="max-w-2xl min-w-0">
-                <p className="text-xs font-medium text-sky-600 dark:text-sky-400 mb-1.5">
-                  Ranked Most Important → Least Important · Isolated Domain &amp; Auto-Loading Filter Sessions
-                </p>
                 <h1
                   style={{ textWrap: 'balance' }}
                   className="font-display text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-slate-900 dark:text-white"
                 >
-                  Employee directory, corporate email finder &amp; worldwide company explorer
+                  Corporate email finder &amp; Worldwide company explorer
                 </h1>
               </div>
 
@@ -1360,14 +1493,19 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => setSessionMode('filter')}
+                onClick={() => {
+                  if (sessionMode !== 'filter' && !filterSelectedCompany) {
+                    setActiveTab('industry');
+                  }
+                  setSessionMode('filter');
+                }}
                 className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all duration-150 cursor-pointer whitespace-nowrap ${
                   sessionMode === 'filter'
                     ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                {isFilterLoading ? (
+                {isFilterLoading || isFilterCompanyLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
                 ) : (
                   <SlidersHorizontal className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0" />
@@ -1384,10 +1522,11 @@ export default function App() {
             </div>
           </div>
 
-          {/* Three Primary Result Tabs: FULL NAMES & EMAILS · COMMAND HIERARCHY · INDUSTRY */}
+          {/* Three Primary Result Tabs */}
           <div
+            ref={resultsTopRef}
             role="tablist"
-            aria-label="Employee directory result tabs"
+            aria-label="Directory result tabs"
             className="grid grid-cols-3 gap-1.5 p-1.5 rounded-xl backdrop-blur-xl bg-white/75 dark:bg-slate-900/70 border border-slate-200/85 dark:border-slate-800/85"
           >
             {primaryTabs.map((tab) => {
@@ -1399,7 +1538,13 @@ export default function App() {
                   role="tab"
                   type="button"
                   aria-selected={active}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => {
+                    if (sessionMode === 'filter' && tab.id === 'industry') {
+                      handleBackToCompaniesList();
+                      return;
+                    }
+                    setActiveTab(tab.id);
+                  }}
                   className={`flex items-center justify-center gap-2 px-2.5 sm:px-4 py-2.5 sm:py-3 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden ${
                     active
                       ? 'bg-slate-900 text-white dark:bg-sky-600 dark:text-white shadow-xs'
@@ -1428,7 +1573,7 @@ export default function App() {
           <AnimatePresence mode="wait">
             {activeTab === 'full-names-emails' && (
               <motion.section
-                key={`tab-full-names-emails-${sessionMode}`}
+                key={`tab-full-names-emails-${sessionMode}-${filterSelectedCompany?.slug || 'cohort'}`}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
@@ -1443,18 +1588,42 @@ export default function App() {
                   filterResult={filterExplorerResult}
                   isFilterLoading={isFilterLoading}
                   filters={filters}
-                  onSwitchToFilterSession={() => setSessionMode('filter')}
+                  onSwitchToFilterSession={() => {
+                    setSessionMode('filter');
+                    setActiveTab('industry');
+                  }}
                   onFocusDomainInput={() => searchInputRef.current?.focus()}
                   onInspectDomainFromFilter={(domain) => {
                     void executeDomainLookup(domain, false);
                   }}
+                  filterSelectedCompany={filterSelectedCompany}
+                  filterCompanyResult={filterCompanyResult}
+                  isFilterCompanyLoading={isFilterCompanyLoading}
+                  filterCompanyError={filterCompanyError}
+                  onBackToCompaniesList={handleBackToCompaniesList}
+                  onSelectCompanyFromFilterContact={(compInfo) => {
+                    void handleSelectGlobalCompany({
+                      id: compInfo.slug,
+                      slug: compInfo.slug,
+                      name: compInfo.name,
+                      domain: compInfo.domain,
+                      websiteUrl: `https://${compInfo.domain}`,
+                      logoUrl: null,
+                      location: 'Worldwide',
+                      industry: '',
+                      employeeRange: '',
+                      revenueRange: '',
+                    });
+                  }}
+                  globalPage={globalPage}
+                  onChangeGlobalPage={setGlobalPage}
                 />
               </motion.section>
             )}
 
             {activeTab === 'command-hierarchy' && (
               <motion.section
-                key={`tab-command-hierarchy-${sessionMode}`}
+                key={`tab-command-hierarchy-${sessionMode}-${filterSelectedCompany?.slug || 'cohort'}`}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
@@ -1472,8 +1641,17 @@ export default function App() {
                   selectedSeniority={activeSelectedSeniority}
                   onSelectDepartment={handleSelectActiveDepartment}
                   onSelectSeniority={handleSelectActiveSeniority}
-                  onSwitchToFilterSession={() => setSessionMode('filter')}
+                  onSwitchToFilterSession={() => {
+                    setSessionMode('filter');
+                    setActiveTab('industry');
+                  }}
                   onFocusDomainInput={() => searchInputRef.current?.focus()}
+                  filterSelectedCompany={filterSelectedCompany}
+                  filterCompanyResult={filterCompanyResult}
+                  isFilterCompanyLoading={isFilterCompanyLoading}
+                  onBackToCompaniesList={handleBackToCompaniesList}
+                  globalPage={globalPage}
+                  onChangeGlobalPage={setGlobalPage}
                 />
               </motion.section>
             )}
@@ -1515,7 +1693,12 @@ export default function App() {
                     setDomainInput(d);
                     setActiveTab('full-names-emails');
                   }}
-                  onSwitchSessionMode={setSessionMode}
+                  onSwitchSessionMode={(mode) => {
+                    if (mode === 'filter') {
+                      setActiveTab('industry');
+                    }
+                    setSessionMode(mode);
+                  }}
                   onFocusDomainInput={() => searchInputRef.current?.focus()}
                 />
               </motion.section>
@@ -1669,9 +1852,7 @@ export default function App() {
 
       <footer className="relative z-10 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8 border-t border-slate-200/70 dark:border-slate-800/70 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400 text-center sm:text-left">
         <span>OrgLens Public Directory &amp; Email Format Explorer</span>
-        <span>
-          Ordered Most Important → Least Important · Isolated Domain &amp; Auto-Loading Filter Sessions
-        </span>
+        <span>Corporate email finder &amp; Worldwide company explorer</span>
       </footer>
     </div>
   );

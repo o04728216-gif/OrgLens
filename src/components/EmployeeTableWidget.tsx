@@ -1,10 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
+  Building2,
   Check,
   ChevronLeft,
   ChevronRight,
   Copy,
   Download,
+  ExternalLink,
   Loader2,
   Mail,
   Search,
@@ -16,6 +19,7 @@ import {
 import type {
   EmployeeRecord,
   FilterExplorerResponse,
+  GlobalCompanyItem,
   SearchResponse,
   SessionMode,
   SidebarFiltersState,
@@ -25,6 +29,7 @@ import {
   getExcelFormulaDefinition,
 } from '../utils/emailFormulas';
 import { copyTextToClipboard, exportEmployeesToCsv } from '../utils/offlineStorage';
+import { scrollToListTop } from '../utils/scrollUtils';
 
 interface EmployeeTableWidgetProps {
   sessionMode: SessionMode;
@@ -37,6 +42,18 @@ interface EmployeeTableWidgetProps {
   onSwitchToFilterSession: () => void;
   onFocusDomainInput: () => void;
   onInspectDomainFromFilter?: (domain: string) => void;
+  filterSelectedCompany?: GlobalCompanyItem | null;
+  filterCompanyResult?: SearchResponse | null;
+  isFilterCompanyLoading?: boolean;
+  filterCompanyError?: string | null;
+  onBackToCompaniesList?: () => void;
+  onSelectCompanyFromFilterContact?: (company: {
+    slug: string;
+    name: string;
+    domain: string;
+  }) => void;
+  globalPage?: number;
+  onChangeGlobalPage?: (page: number) => void;
 }
 
 interface ComputedRow extends EmployeeRecord {
@@ -80,19 +97,66 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   onSwitchToFilterSession,
   onFocusDomainInput,
   onInspectDomainFromFilter,
+  filterSelectedCompany = null,
+  filterCompanyResult = null,
+  isFilterCompanyLoading = false,
+  filterCompanyError = null,
+  onBackToCompaniesList,
+  onSelectCompanyFromFilterContact,
+  globalPage = 1,
+  onChangeGlobalPage,
 }) => {
   const [domainLocalQuery, setDomainLocalQuery] = useState('');
   const [filterLocalQuery, setFilterLocalQuery] = useState('');
+  const [filterCompanyLocalQuery, setFilterCompanyLocalQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [transitioningPage, setTransitioningPage] = useState<number | null>(
+    null
+  );
+  const [requestedServerPage, setRequestedServerPage] = useState<number | null>(
+    null
+  );
   const [copiedNamesCount, setCopiedNamesCount] = useState<number | null>(null);
   const [copiedEmailsCount, setCopiedEmailsCount] = useState<number | null>(null);
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
+  const [copiedHeaderMeta, setCopiedHeaderMeta] = useState<
+    'name' | 'website' | null
+  >(null);
+  const listTopRef = useRef<HTMLDivElement>(null);
+  const pageTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pageTimerRef.current !== null) {
+        window.clearTimeout(pageTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFilterLoading) {
+      setRequestedServerPage(null);
+    }
+  }, [isFilterLoading]);
+
+  const isViewingFilterCompany =
+    sessionMode === 'filter' && Boolean(filterSelectedCompany);
+
+  // Active single-company SearchResponse (either Domain Lookup OR a clicked company inside Filter Explorer)
+  const activeSingleCompanyResult =
+    sessionMode === 'domain'
+      ? domainResult
+      : isViewingFilterCompany
+      ? filterCompanyResult
+      : null;
 
   useEffect(() => {
     setCurrentPage(1);
   }, [
     sessionMode,
     domainResult?.domain,
+    filterSelectedCompany?.slug,
+    filterCompanyResult?.domain,
     filterResult?.fetchedAt,
     filters.contactSearch,
     filters.roleKeyword,
@@ -102,38 +166,59 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     filters.maxAccuracy,
   ]);
 
+  useEffect(() => {
+    setFilterCompanyLocalQuery('');
+  }, [filterSelectedCompany?.slug]);
+
   const localQuery =
-    sessionMode === 'domain' ? domainLocalQuery : filterLocalQuery;
+    sessionMode === 'domain'
+      ? domainLocalQuery
+      : isViewingFilterCompany
+      ? filterCompanyLocalQuery
+      : filterLocalQuery;
+
   const setLocalQuery = (val: string) => {
     if (sessionMode === 'domain') {
       setDomainLocalQuery(val);
+    } else if (isViewingFilterCompany) {
+      setFilterCompanyLocalQuery(val);
     } else {
       setFilterLocalQuery(val);
     }
     setCurrentPage(1);
   };
 
-  // Domain Session exclusively uses the domain's detected corporate format (completely isolated from Sidebar Filters)
+  // Detected corporate format for either Domain Lookup or a clicked Filter Explorer company
   const domainFormulaDef = useMemo(() => {
-    if (!domainResult) return null;
+    if (!activeSingleCompanyResult) return null;
     return getExcelFormulaDefinition(
-      domainResult.emailPattern.detectedFormulaId
+      activeSingleCompanyResult.emailPattern.detectedFormulaId
     );
-  }, [domainResult]);
+  }, [activeSingleCompanyResult]);
 
-  // Compute active rows cleanly separated by sessionMode
+  // Compute active rows cleanly separated by mode (Domain Lookup, Clicked Filter Company, or Multi-Company Filter Cohort)
   const filteredEmployees = useMemo<ComputedRow[]>(() => {
     const qLocal = localQuery.trim().toLowerCase();
 
-    if (sessionMode === 'domain') {
-      if (!domainResult) return [];
-      const formulaId = domainResult.emailPattern.detectedFormulaId;
+    if (sessionMode === 'domain' || isViewingFilterCompany) {
+      if (!activeSingleCompanyResult) return [];
+      const detectedId =
+        activeSingleCompanyResult.emailPattern.detectedFormulaId;
+      const formulaId =
+        isViewingFilterCompany && filters.emailFormulaOverride !== 'auto'
+          ? filters.emailFormulaOverride
+          : detectedId;
 
-      const rows = domainResult.employees
+      const rows = activeSingleCompanyResult.employees
         .map((emp) => {
           const resolvedEmail =
-            emp.email ||
-            applyExcelEmailFormula(emp.fullName, domainResult.domain, formulaId);
+            formulaId === detectedId && emp.email
+              ? emp.email
+              : applyExcelEmailFormula(
+                  emp.fullName,
+                  activeSingleCompanyResult.domain,
+                  formulaId
+                );
           return {
             ...emp,
             resolvedEmail,
@@ -156,7 +241,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       }));
     }
 
-    // Filter Explorer Session: uses live filterResult + instant client filter reactivity
+    // Filter Explorer Cohort: uses live filterResult + instant client filter reactivity
     if (!filterResult) return [];
     const qContact = filters.contactSearch.trim().toLowerCase();
     const qRole = filters.roleKeyword.trim().toLowerCase();
@@ -233,7 +318,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     }));
   }, [
     sessionMode,
-    domainResult,
+    isViewingFilterCompany,
+    activeSingleCompanyResult,
     filterResult,
     localQuery,
     filters.contactSearch,
@@ -245,12 +331,34 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     filters.emailFormulaOverride,
   ]);
 
-  const totalPages = Math.max(
+  const totalCompanyBatches = Math.max(1, filterResult?.totalPages || 1);
+  const activeCompanyBatch = Math.min(
+    Math.max(1, globalPage),
+    totalCompanyBatches
+  );
+
+  const localTotalPages = Math.max(
     1,
     Math.ceil(filteredEmployees.length / CONTACTS_PER_PAGE)
   );
-  const safePage = Math.min(currentPage, totalPages);
-  const pageStartIndex = (safePage - 1) * CONTACTS_PER_PAGE;
+  const useServerBatchPagination =
+    sessionMode === 'filter' &&
+    !isViewingFilterCompany &&
+    localTotalPages <= 1 &&
+    totalCompanyBatches > 1 &&
+    Boolean(onChangeGlobalPage);
+
+  const totalPages = useServerBatchPagination
+    ? totalCompanyBatches
+    : localTotalPages;
+
+  const safePage = useServerBatchPagination
+    ? activeCompanyBatch
+    : Math.min(currentPage, totalPages);
+
+  const pageStartIndex = useServerBatchPagination
+    ? 0
+    : (safePage - 1) * CONTACTS_PER_PAGE;
 
   const displayedEmployees = useMemo(
     () =>
@@ -274,8 +382,55 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     return Array.from({ length: end - start + 1 }, (_, i) => start + i);
   }, [totalPages, safePage]);
 
+  const isServerBatchLoading =
+    sessionMode === 'filter' &&
+    !isViewingFilterCompany &&
+    isFilterLoading &&
+    (requestedServerPage !== null ||
+      Boolean(filterResult && filterResult.page !== globalPage));
+
+  const isPaginationLoading = isServerBatchLoading || transitioningPage !== null;
+
+  const targetCompanyBatch = requestedServerPage ?? activeCompanyBatch;
+  const targetPaginationPage = useServerBatchPagination
+    ? targetCompanyBatch
+    : transitioningPage ?? safePage;
+
+  const handleSelectCompanyBatch = (nextBatch: number) => {
+    if (!onChangeGlobalPage) return;
+    const bounded = Math.max(1, Math.min(totalCompanyBatches, nextBatch));
+    scrollToListTop(listTopRef.current);
+    if (bounded === globalPage && !isServerBatchLoading) return;
+    setRequestedServerPage(bounded);
+    setCurrentPage(1);
+    onChangeGlobalPage(bounded);
+  };
+
+  const handleSelectContactsPage = (nextPage: number) => {
+    const bounded = Math.max(1, Math.min(totalPages, nextPage));
+    scrollToListTop(listTopRef.current);
+
+    if (useServerBatchPagination && onChangeGlobalPage) {
+      handleSelectCompanyBatch(bounded);
+      return;
+    }
+
+    if (bounded === safePage && transitioningPage === null) return;
+    if (pageTimerRef.current !== null) {
+      window.clearTimeout(pageTimerRef.current);
+    }
+    setTransitioningPage(bounded);
+    pageTimerRef.current = window.setTimeout(() => {
+      setCurrentPage(bounded);
+      setTransitioningPage(null);
+      pageTimerRef.current = null;
+    }, 220);
+  };
+
   const coherentTotalContacts = useMemo(() => {
-    if (sessionMode === 'domain') return filteredEmployees.length;
+    if (sessionMode === 'domain' || isViewingFilterCompany) {
+      return filteredEmployees.length;
+    }
     if (!filterResult) return 0;
     if (
       filterResult.totalMatchedCompanies === 0 ||
@@ -288,7 +443,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     if (serverLoaded === 0) return baseTotal;
     const ratio = filteredEmployees.length / serverLoaded;
     return Math.max(filteredEmployees.length, Math.round(baseTotal * ratio));
-  }, [sessionMode, filterResult, filteredEmployees.length]);
+  }, [sessionMode, isViewingFilterCompany, filterResult, filteredEmployees.length]);
 
   const handleCopyFullNameList = async () => {
     if (filteredEmployees.length === 0) return;
@@ -328,19 +483,134 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   const isInitialLoading =
     sessionMode === 'domain'
       ? isDomainLoading
+      : isViewingFilterCompany
+      ? isFilterCompanyLoading
       : isFilterLoading && !filterResult;
+
+  const selectedCompanyDomain =
+    activeSingleCompanyResult?.domain ||
+    filterSelectedCompany?.domain ||
+    (filterSelectedCompany?.slug ? `${filterSelectedCompany.slug}.com` : '');
+  const selectedCompanyWebsiteUrl =
+    filterSelectedCompany?.websiteUrl ||
+    (selectedCompanyDomain ? `https://${selectedCompanyDomain}` : '');
+
+  const renderFilterCompanyBackBar = () => {
+    if (!isViewingFilterCompany || !filterSelectedCompany) return null;
+    const displayName =
+      activeSingleCompanyResult?.companyName || filterSelectedCompany.name;
+
+    return (
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200/80 dark:border-slate-800/80">
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
+          {onBackToCompaniesList && (
+            <button
+              type="button"
+              onClick={onBackToCompaniesList}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 border border-slate-800 dark:border-slate-700 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Companies List
+            </button>
+          )}
+
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-display text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+                {displayName}
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = await copyTextToClipboard(displayName);
+                  if (ok) {
+                    setCopiedHeaderMeta('name');
+                    window.setTimeout(() => setCopiedHeaderMeta(null), 1800);
+                  }
+                }}
+                title={`Copy "${displayName}"`}
+                aria-label={`Copy ${displayName}`}
+                className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer shrink-0"
+              >
+                {copiedHeaderMeta === 'name' ? (
+                  <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
+              </button>
+
+              {selectedCompanyDomain && (
+                <div className="inline-flex items-center gap-1.5 font-mono text-xs">
+                  <span aria-hidden="true" className="text-slate-400">
+                    ·
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await copyTextToClipboard(
+                        selectedCompanyWebsiteUrl
+                      );
+                      if (ok) {
+                        setCopiedHeaderMeta('website');
+                        window.setTimeout(
+                          () => setCopiedHeaderMeta(null),
+                          1800
+                        );
+                      }
+                    }}
+                    title={`Copy ${selectedCompanyWebsiteUrl}`}
+                    aria-label={`Copy ${selectedCompanyWebsiteUrl}`}
+                    className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer shrink-0"
+                  >
+                    {copiedHeaderMeta === 'website' ? (
+                      <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                  <a
+                    href={selectedCompanyWebsiteUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400 hover:underline underline-offset-4"
+                  >
+                    <span>{selectedCompanyDomain}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+              {activeSingleCompanyResult?.headquarters ||
+                filterSelectedCompany.location}
+              {(activeSingleCompanyResult?.industry ||
+                filterSelectedCompany.industry) &&
+                ` · ${
+                  activeSingleCompanyResult?.industry ||
+                  filterSelectedCompany.industry
+                }`}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   if (isInitialLoading) {
     return (
       <div className="space-y-4" aria-busy="true" aria-live="polite">
+        {renderFilterCompanyBackBar()}
+
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
           <span>
-            {sessionMode === 'domain' ? (
+            {sessionMode === 'domain' || isViewingFilterCompany ? (
               <>
                 Indexing full roster, MX mail servers, and corporate email format
                 for{' '}
                 <strong className="font-mono text-slate-800 dark:text-slate-200">
-                  {loadingDomain || 'company'}
+                  {isViewingFilterCompany
+                    ? filterSelectedCompany?.name || 'company'
+                    : loadingDomain || 'company'}
                 </strong>
                 ...
               </>
@@ -403,7 +673,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           Enter any company domain above to extract Full Names, Emails &amp; Job Titles
         </h4>
         <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
-          Domain Lookup runs in its own isolated session: it detects the organization&apos;s verified email format, calculates accuracy scores, and ranks every contact from executive leadership to entry-level roles.
+          Domain Lookup detects the organization&apos;s verified email format, calculates accuracy scores, and ranks every contact from executive leadership to entry-level roles.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
           <button
@@ -427,29 +697,67 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     );
   }
 
+  if (isViewingFilterCompany && filterCompanyError && !activeSingleCompanyResult) {
+    return (
+      <div className="space-y-4">
+        {renderFilterCompanyBackBar()}
+        <div className="py-10 px-4 text-center rounded-xl border border-slate-200/80 dark:border-slate-800/80">
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            {filterCompanyError}
+          </p>
+          {onBackToCompaniesList && (
+            <button
+              type="button"
+              onClick={onBackToCompaniesList}
+              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Companies List
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-4">
+    <div ref={listTopRef} className="space-y-4 scroll-mt-24">
+      {renderFilterCompanyBackBar()}
+
       {/* Top Session Metadata Line */}
-      {sessionMode === 'domain' && domainResult ? (
+      {(sessionMode === 'domain' || isViewingFilterCompany) &&
+      activeSingleCompanyResult ? (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 dark:text-slate-300 px-1">
           <span className="font-semibold text-slate-900 dark:text-white">
             Detected Format:{' '}
-            {domainFormulaDef?.label || domainResult.emailPattern.formulaLabel}
+            {domainFormulaDef?.label ||
+              activeSingleCompanyResult.emailPattern.formulaLabel}
           </span>
           <span aria-hidden="true">·</span>
           <span className="font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">
-            {domainResult.emailPattern.patternConfidence}% Pattern Accuracy
+            {activeSingleCompanyResult.emailPattern.patternConfidence}% Pattern
+            Accuracy
           </span>
           <span aria-hidden="true">·</span>
           <span>
-            {domainResult.emailPattern.mxVerified
-              ? `MX Verified (${domainResult.emailPattern.mxProvider})`
+            {activeSingleCompanyResult.emailPattern.mxVerified
+              ? `MX Verified (${activeSingleCompanyResult.emailPattern.mxProvider})`
               : 'Standard Domain Routing'}
           </span>
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-300 px-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            {onBackToCompaniesList && (
+              <button
+                type="button"
+                onClick={onBackToCompaniesList}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer mr-1 whitespace-nowrap"
+              >
+                <Building2 className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
+                Companies List
+              </button>
+            )}
             <span className="font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
               Filter Explorer:
             </span>
@@ -461,11 +769,14 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               {(filterResult?.totalMatchedCompanies || 0).toLocaleString()}{' '}
               Matching Companies
             </span>
-            {coherentTotalContacts > filteredEmployees.length && (
+            {totalCompanyBatches > 1 && (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                  {filteredEmployees.length.toLocaleString()} Loaded in Current Batch
+                <span className="font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                  Company Batch {activeCompanyBatch.toLocaleString()} of{' '}
+                  {totalCompanyBatches.toLocaleString()} (
+                  {filteredEmployees.length.toLocaleString()} Contacts from{' '}
+                  {(filterResult?.companies.length || 0).toLocaleString()} Orgs)
                 </span>
               </>
             )}
@@ -489,8 +800,9 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
             value={localQuery}
             onChange={(e) => setLocalQuery(e.target.value)}
             placeholder={
-              sessionMode === 'domain' && domainResult
-                ? `Search ${domainResult.employees.length.toLocaleString()} names, titles, or @${domainResult.domain} emails...`
+              (sessionMode === 'domain' || isViewingFilterCompany) &&
+              activeSingleCompanyResult
+                ? `Search ${activeSingleCompanyResult.employees.length.toLocaleString()} names, titles, or @${activeSingleCompanyResult.domain} emails...`
                 : 'Refine filtered names, emails, job titles, or companies...'
             }
             aria-label="Filter full names, emails, and job titles"
@@ -509,53 +821,99 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Retain Copy Full Name List Button */}
-          <button
-            type="button"
-            disabled={filteredEmployees.length === 0}
-            onClick={() => void handleCopyFullNameList()}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50 ${
-              copiedNamesCount !== null
-                ? 'bg-emerald-600 text-white'
-                : 'bg-sky-600 hover:bg-sky-500 text-white shadow-xs'
-            }`}
-          >
-            {copiedNamesCount !== null ? (
-              <>
-                <Check className="h-3.5 w-3.5" />
-                Copied {copiedNamesCount.toLocaleString()} Full Names
-              </>
-            ) : (
-              <>
-                <Copy className="h-3.5 w-3.5" />
-                Copy Full Name List ({filteredEmployees.length.toLocaleString()})
-              </>
-            )}
-          </button>
+          {/* Domain Lookup Only: Copy Full Name List & Copy Email List */}
+          {sessionMode === 'domain' && (
+            <>
+              <button
+                type="button"
+                disabled={filteredEmployees.length === 0}
+                onClick={() => void handleCopyFullNameList()}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50 ${
+                  copiedNamesCount !== null
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-sky-600 hover:bg-sky-500 text-white shadow-xs'
+                }`}
+              >
+                {copiedNamesCount !== null ? (
+                  <>
+                    <Check className="h-3.5 w-3.5" />
+                    Copied {copiedNamesCount.toLocaleString()} Full Names
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy Full Name List ({filteredEmployees.length.toLocaleString()})
+                  </>
+                )}
+              </button>
 
-          {/* Retain Copy Email List Button */}
-          <button
-            type="button"
-            disabled={filteredEmployees.length === 0}
-            onClick={() => void handleCopyEmailList()}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50 ${
-              copiedEmailsCount !== null
-                ? 'border-emerald-600 bg-emerald-600 text-white'
-                : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700'
-            }`}
-          >
-            {copiedEmailsCount !== null ? (
-              <>
-                <Check className="h-3.5 w-3.5" />
-                Copied {copiedEmailsCount.toLocaleString()} Emails
-              </>
-            ) : (
-              <>
-                <Mail className="h-3.5 w-3.5" />
-                Copy Email List ({filteredEmployees.length.toLocaleString()})
-              </>
+              <button
+                type="button"
+                disabled={filteredEmployees.length === 0}
+                onClick={() => void handleCopyEmailList()}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50 ${
+                  copiedEmailsCount !== null
+                    ? 'border-emerald-600 bg-emerald-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                {copiedEmailsCount !== null ? (
+                  <>
+                    <Check className="h-3.5 w-3.5" />
+                    Copied {copiedEmailsCount.toLocaleString()} Emails
+                  </>
+                ) : (
+                  <>
+                    <Mail className="h-3.5 w-3.5" />
+                    Copy Email List ({filteredEmployees.length.toLocaleString()})
+                  </>
+                )}
+              </button>
+            </>
+          )}
+
+          {/* Filter Explorer Multi-Batch Stepper: Load next/previous 500-company batch on demand */}
+          {sessionMode === 'filter' &&
+            !isViewingFilterCompany &&
+            totalCompanyBatches > 1 &&
+            onChangeGlobalPage && (
+              <div className="inline-flex items-center gap-1 p-1 rounded-lg border border-slate-200/90 dark:border-slate-800 bg-white/80 dark:bg-slate-950/60">
+                <button
+                  type="button"
+                  disabled={activeCompanyBatch <= 1 || isServerBatchLoading}
+                  onClick={() =>
+                    handleSelectCompanyBatch(activeCompanyBatch - 1)
+                  }
+                  title="Load previous 500-company batch"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  Prev Batch
+                </button>
+                <span className="px-2 text-xs font-mono tabular-nums font-semibold text-sky-700 dark:text-sky-400 whitespace-nowrap">
+                  Batch {(isServerBatchLoading
+                    ? targetCompanyBatch
+                    : activeCompanyBatch
+                  ).toLocaleString()}{' '}
+                  / {totalCompanyBatches.toLocaleString()}
+                </span>
+                <button
+                  type="button"
+                  disabled={
+                    activeCompanyBatch >= totalCompanyBatches ||
+                    isServerBatchLoading
+                  }
+                  onClick={() =>
+                    handleSelectCompanyBatch(activeCompanyBatch + 1)
+                  }
+                  title="Load next 500-company batch"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  Next Batch
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
             )}
-          </button>
 
           {/* Export CSV */}
           {filteredEmployees.length > 0 && (
@@ -569,13 +927,14 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                     email: emp.resolvedEmail,
                     emailAccuracy: emp.resolvedAccuracy,
                   })),
-                  sessionMode === 'domain' && domainResult
-                    ? domainResult.domain
+                  (sessionMode === 'domain' || isViewingFilterCompany) &&
+                    activeSingleCompanyResult
+                    ? activeSingleCompanyResult.domain
                     : 'filtered-contacts',
                   sessionMode === 'domain'
                     ? 'auto'
                     : filters.emailFormulaOverride,
-                  domainResult?.emailPattern.detectedFormulaId
+                  activeSingleCompanyResult?.emailPattern.detectedFormulaId
                 )
               }
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-100 dark:hover:bg-white dark:text-slate-950 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
@@ -604,23 +963,64 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         </span>
       </div>
 
+      {isPaginationLoading && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl border border-sky-500/40 bg-sky-500/10 dark:bg-sky-500/15 text-xs font-semibold text-sky-800 dark:text-sky-200"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
+            <span>
+              {isServerBatchLoading
+                ? `Loading Company Batch ${targetCompanyBatch.toLocaleString()} of ${totalCompanyBatches.toLocaleString()} (500 matching companies)...`
+                : `Loading page ${targetPaginationPage.toLocaleString()} of ${totalPages.toLocaleString()}...`}
+            </span>
+          </span>
+          <span className="font-mono tabular-nums text-[11px] text-sky-700/85 dark:text-sky-300/85">
+            {isServerBatchLoading ? '500 companies/batch' : '500 contacts/page'}
+          </span>
+        </div>
+      )}
+
       {/* Full Names + Emails + Job Title + Accuracy % HTML <table> */}
       {filteredEmployees.length === 0 ? (
         <div className="py-10 px-4 text-center rounded-xl border border-slate-200/80 dark:border-slate-800/80">
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-            {sessionMode === 'domain'
-              ? 'No contacts in this domain match your quick search.'
+            {sessionMode === 'domain' || isViewingFilterCompany
+              ? localQuery
+                ? 'No contacts in this company match your quick search.'
+                : 'No publicly indexed employee records were found for this organization.'
               : 'No contacts matched this exact combination of sidebar filters.'}
           </p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {sessionMode === 'domain'
-              ? 'Clear the quick search input above to view the full organization roster.'
+            {sessionMode === 'domain' || isViewingFilterCompany
+              ? localQuery
+                ? 'Clear the quick search input above to view the full organization roster.'
+                : 'Return to Companies List to select another organization.'
               : 'Broaden your Accuracy Score, Role, Location, or Revenue selection in the left sidebar.'}
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/55 dark:bg-slate-950/35">
-          <table className="w-full text-left border-collapse">
+        <div className="relative rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/55 dark:bg-slate-950/35">
+          {isPaginationLoading && (
+            <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex justify-center px-4">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl backdrop-blur-md bg-white/95 dark:bg-slate-900/95 border border-sky-500/40 shadow-sm text-xs font-semibold text-slate-900 dark:text-white">
+                <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
+                <span>
+                  {isServerBatchLoading
+                    ? `Loading Company Batch ${targetCompanyBatch.toLocaleString()}...`
+                    : `Loading page ${targetPaginationPage.toLocaleString()}...`}
+                </span>
+              </div>
+            </div>
+          )}
+          <div
+            className={`overflow-x-auto rounded-xl transition-opacity duration-150 ${
+              isPaginationLoading ? 'opacity-45 pointer-events-none' : 'opacity-100'
+            }`}
+          >
+            <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/75 dark:bg-slate-900/75 text-xs font-semibold text-slate-600 dark:text-slate-300">
                 <th scope="col" className="py-3 px-4 w-14 font-mono">
@@ -661,23 +1061,39 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                       <div className="font-medium text-slate-900 dark:text-slate-100">
                         {emp.fullName}
                       </div>
-                      {sessionMode === 'filter' && (
+                      {sessionMode === 'filter' && !isViewingFilterCompany && (
                         <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-0.5">
-                          <span className="truncate max-w-44">
-                            {emp.companyName || emp.domain}
-                          </span>
-                          {onInspectDomainFromFilter && emp.domain && (
+                          {onSelectCompanyFromFilterContact && emp.domain ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSelectCompanyFromFilterContact({
+                                  slug: emp.domain.split('.')[0] || emp.domain,
+                                  name: emp.companyName || emp.domain,
+                                  domain: emp.domain,
+                                })
+                              }
+                              className="truncate max-w-44 font-medium text-slate-700 dark:text-slate-300 hover:text-sky-600 dark:hover:text-sky-400 hover:underline cursor-pointer"
+                            >
+                              {emp.companyName || emp.domain}
+                            </button>
+                          ) : (
+                            <span className="truncate max-w-44">
+                              {emp.companyName || emp.domain}
+                            </span>
+                          )}
+                          {emp.domain && (
                             <>
                               <span aria-hidden="true">·</span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onInspectDomainFromFilter(emp.domain)
-                                }
-                                className="font-mono text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300 hover:underline cursor-pointer"
+                              <a
+                                href={`https://${emp.domain}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-mono text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300 hover:underline inline-flex items-center gap-0.5"
                               >
-                                {emp.domain}
-                              </button>
+                                <span>{emp.domain}</span>
+                                <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                              </a>
                             </>
                           )}
                         </div>
@@ -731,6 +1147,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -738,36 +1155,55 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       {totalPages > 1 && (
         <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
           <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-            Page {safePage.toLocaleString()} of {totalPages.toLocaleString()} · 500/page
+            {isPaginationLoading ? (
+              <span className="inline-flex items-center gap-1.5 font-sans font-semibold text-sky-600 dark:text-sky-400">
+                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                Loading page {targetPaginationPage.toLocaleString()} of{' '}
+                {totalPages.toLocaleString()}...
+              </span>
+            ) : (
+              <>
+                Page {safePage.toLocaleString()} of{' '}
+                {totalPages.toLocaleString()} · 500/page
+              </>
+            )}
           </span>
           <div className="flex items-center gap-1 flex-wrap">
             <button
               type="button"
-              disabled={safePage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1 || isPaginationLoading}
+              onClick={() => handleSelectContactsPage(safePage - 1)}
               aria-label="Previous contacts page"
               className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>
-            {visiblePageNumbers.map((pg) => (
-              <button
-                key={pg}
-                type="button"
-                onClick={() => setCurrentPage(pg)}
-                className={`min-w-8 h-8 px-2 rounded-lg text-xs font-mono tabular-nums font-medium transition-colors cursor-pointer ${
-                  pg === safePage
-                    ? 'bg-sky-600 text-white'
-                    : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                {pg}
-              </button>
-            ))}
+            {visiblePageNumbers.map((pg) => {
+              const isTargetLoading =
+                isPaginationLoading && pg === targetPaginationPage;
+              return (
+                <button
+                  key={pg}
+                  type="button"
+                  disabled={isPaginationLoading}
+                  onClick={() => handleSelectContactsPage(pg)}
+                  className={`inline-flex items-center justify-center gap-1.5 min-w-8 h-8 px-2 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors cursor-pointer ${
+                    pg === safePage || isTargetLoading
+                      ? 'bg-sky-600 text-white shadow-xs'
+                      : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {isTargetLoading && (
+                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                  )}
+                  <span>{pg}</span>
+                </button>
+              );
+            })}
             <button
               type="button"
-              disabled={safePage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages || isPaginationLoading}
+              onClick={() => handleSelectContactsPage(safePage + 1)}
               aria-label="Next contacts page"
               className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
             >

@@ -98,23 +98,48 @@ type AccordionSectionId =
   | 'company-revenue'
   | 'locations';
 
+function countEnteredTerms(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  return trimmed
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+}
+
+export function getSidebarSectionSelectedCounts(
+  f: SidebarFiltersState
+): Record<AccordionSectionId, number> {
+  const selectedCountriesSet = new Set(f.selectedCountries);
+  for (const contName of f.selectedContinents) {
+    const cont = CONTINENTS_CATALOG.find((c) => c.name === contName);
+    if (cont) {
+      for (const ctry of cont.countries) {
+        selectedCountriesSet.add(ctry.name);
+      }
+    }
+  }
+
+  return {
+    'contact-name': countEnteredTerms(f.contactSearch),
+    'current-role':
+      countEnteredTerms(f.roleKeyword) +
+      f.seniorities.length +
+      f.departments.length,
+    'email-formula': f.emailFormulaOverride !== 'auto' ? 1 : 0,
+    'accuracy-score': f.minAccuracy > 50 || f.maxAccuracy < 99 ? 1 : 0,
+    'company-name': countEnteredTerms(f.companyNameFilter),
+    industry:
+      f.selectedIndustrySlugs.length + countEnteredTerms(f.industryKeyword),
+    'employee-count': f.employeeRanges.length,
+    'company-revenue': f.revenueRanges.length,
+    locations: selectedCountriesSet.size + countEnteredTerms(f.locationQuery),
+  };
+}
+
 export function countActiveSidebarFilters(f: SidebarFiltersState): number {
-  let count = 0;
-  if (f.contactSearch.trim()) count++;
-  if (f.roleKeyword.trim()) count++;
-  if (f.seniorities.length > 0) count++;
-  if (f.departments.length > 0) count++;
-  if (f.minAccuracy > 50 || f.maxAccuracy < 99) count++;
-  if (f.emailFormulaOverride !== 'auto') count++;
-  if (f.companyNameFilter.trim()) count++;
-  if (f.selectedIndustrySlugs.length > 0) count++;
-  if (f.industryKeyword.trim()) count++;
-  if (f.employeeRanges.length > 0) count++;
-  if (f.revenueRanges.length > 0) count++;
-  if (f.selectedContinents.length > 0) count++;
-  if (f.selectedCountries.length > 0) count++;
-  if (f.locationQuery.trim()) count++;
-  return count;
+  const counts = getSidebarSectionSelectedCounts(f);
+  return Object.values(counts).reduce((sum, n) => sum + n, 0);
 }
 
 export const FilterSidebar: React.FC<FilterSidebarProps> = ({
@@ -141,25 +166,26 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   const [locationTreeSearch, setLocationTreeSearch] = useState('');
   const [showSavedMenu, setShowSavedMenu] = useState(false);
 
+  // All filter sections collapsed on first load
   const [openSections, setOpenSections] = useState<
     Record<AccordionSectionId, boolean>
   >({
     'contact-name': false,
     'current-role': false,
     'email-formula': false,
-    'accuracy-score': true,
+    'accuracy-score': false,
     'company-name': false,
-    industry: true,
+    industry: false,
     'employee-count': false,
     'company-revenue': false,
-    locations: true,
+    locations: false,
   });
 
-  // Track which Continents have their Country dropdown expanded
+  // Track which Continents have their Country dropdown expanded (collapsed on first load)
   const [expandedContinents, setExpandedContinents] = useState<
     Record<string, boolean>
   >({
-    'north-america': true,
+    'north-america': false,
     europe: false,
     asia: false,
     'south-america': false,
@@ -169,12 +195,31 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const activeCount = useMemo(
-    () => countActiveSidebarFilters(filters),
+  const sectionCounts = useMemo(
+    () => getSidebarSectionSelectedCounts(filters),
     [filters]
   );
+  const activeCount = useMemo(
+    () => Object.values(sectionCounts).reduce((sum, n) => sum + n, 0),
+    [sectionCounts]
+  );
+
+  const [searchClosedSections, setSearchClosedSections] = useState<
+    Partial<Record<AccordionSectionId, boolean>>
+  >({});
+
+  const isSectionOpen = (id: AccordionSectionId): boolean => {
+    if (sidebarSearch.trim()) {
+      return !searchClosedSections[id];
+    }
+    return Boolean(openSections[id]);
+  };
 
   const toggleSection = (id: AccordionSectionId) => {
+    if (sidebarSearch.trim()) {
+      setSearchClosedSections((prev) => ({ ...prev, [id]: !prev[id] }));
+      return;
+    }
     setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
@@ -196,9 +241,13 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
     );
   }, [globalIndustries, industrySearch, sidebarSearch]);
 
-  // Filter Continents & Countries tree dynamically when searching in Locations
+  // Filter Continents & Countries tree dynamically when searching in Locations or global sidebar search
+  const effectiveLocationSearch = (locationTreeSearch || sidebarSearch)
+    .trim()
+    .toLowerCase();
+
   const filteredContinentsTree = useMemo(() => {
-    const q = locationTreeSearch.trim().toLowerCase();
+    const q = effectiveLocationSearch;
     if (!q) return CONTINENTS_CATALOG;
 
     return CONTINENTS_CATALOG.map((continent) => {
@@ -215,12 +264,71 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
         countries: matchingCountries,
       };
     }).filter((c) => c.countries.length > 0);
-  }, [locationTreeSearch]);
+  }, [effectiveLocationSearch]);
 
-  const matchesQuickFilter = (keywords: string): boolean => {
+  const matchesQuickFilter = (
+    keywords: string,
+    extraMatch = false
+  ): boolean => {
     const q = sidebarSearch.trim().toLowerCase();
     if (!q) return true;
-    return keywords.toLowerCase().includes(q);
+    return extraMatch || keywords.toLowerCase().includes(q);
+  };
+
+  const getAccordionCardClass = (selectedCount: number): string =>
+    selectedCount > 0
+      ? 'rounded-xl border border-sky-500/35 dark:border-sky-500/30 bg-sky-500/[0.04] dark:bg-sky-500/[0.06]'
+      : 'rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40';
+
+  const renderAccordionHeader = (
+    id: AccordionSectionId,
+    label: string,
+    totalOptions?: number
+  ) => {
+    const selectedCount = sectionCounts[id];
+    const opened = isSectionOpen(id);
+    const effectiveTotal =
+      typeof totalOptions === 'number' && totalOptions > 0
+        ? Math.max(totalOptions, selectedCount)
+        : undefined;
+
+    return (
+      <button
+        type="button"
+        onClick={() => toggleSection(id)}
+        aria-expanded={opened}
+        className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
+      >
+        <span className="truncate min-w-0">{label}</span>
+
+        <span className="flex items-center gap-2 shrink-0">
+          {effectiveTotal !== undefined ? (
+            <span
+              className={`font-mono tabular-nums text-[11px] ${
+                selectedCount > 0
+                  ? 'font-semibold text-sky-600 dark:text-sky-400'
+                  : 'font-normal text-slate-400 dark:text-slate-500'
+              }`}
+            >
+              {selectedCount > 0
+                ? `${selectedCount}/${effectiveTotal}`
+                : effectiveTotal}
+            </span>
+          ) : (
+            selectedCount > 0 && (
+              <span className="font-mono tabular-nums text-[11px] font-semibold text-sky-600 dark:text-sky-400">
+                {selectedCount}
+              </span>
+            )
+          )}
+          {opened ? (
+            <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+          ) : (
+            <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+          )}
+        </span>
+      </button>
+    );
   };
 
   const handleToggleIndustrySlug = (slug: string) => {
@@ -354,7 +462,10 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
           <input
             type="text"
             value={sidebarSearch}
-            onChange={(e) => setSidebarSearch(e.target.value)}
+            onChange={(e) => {
+              setSidebarSearch(e.target.value);
+              setSearchClosedSections({});
+            }}
             placeholder="Search filters or values"
             aria-label="Search filters or values"
             className="w-full pl-8 pr-7 py-2 text-xs rounded-lg bg-white dark:bg-slate-950/70 border border-slate-200/90 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 transition-colors"
@@ -362,7 +473,10 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
           {sidebarSearch && (
             <button
               type="button"
-              onClick={() => setSidebarSearch('')}
+              onClick={() => {
+                setSidebarSearch('');
+                setSearchClosedSections({});
+              }}
               aria-label="Clear sidebar search"
               className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
             >
@@ -447,21 +561,22 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
           {/* 1. Contact Name or Email */}
           {matchesQuickFilter('contact name email address person') && (
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('contact-name')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span>Contact Name or Email</span>
-                {openSections['contact-name'] ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
-              {openSections['contact-name'] && (
+            <div className={getAccordionCardClass(sectionCounts['contact-name'])}>
+              {renderAccordionHeader('contact-name', 'Contact Name or Email')}
+              {isSectionOpen('contact-name') && (
                 <div className="px-3.5 pb-3.5 pt-2 space-y-2 border-t border-slate-200/60 dark:border-slate-800/60">
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                    <span>Name or Email Filter</span>
+                    <span
+                      className={`font-mono tabular-nums ${
+                        sectionCounts['contact-name'] > 0
+                          ? 'font-semibold text-sky-600 dark:text-sky-400'
+                          : 'text-slate-400 dark:text-slate-500'
+                      }`}
+                    >
+                      {sectionCounts['contact-name']} selected
+                    </span>
+                  </div>
                   <input
                     type="text"
                     value={filters.contactSearch}
@@ -481,27 +596,31 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
           {/* 2. Current Role & Seniority */}
           {matchesQuickFilter(
-            'current role job title seniority department ceo vp engineer'
+            'current role job title seniority department ceo vp engineer director lead executive sales operations finance research product',
+            SENIORITY_OPTIONS.some((s) =>
+              s.toLowerCase().includes(sidebarSearch.trim().toLowerCase())
+            ) ||
+              DEPARTMENT_OPTIONS.some((d) =>
+                d.toLowerCase().includes(sidebarSearch.trim().toLowerCase())
+              )
           ) && (
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('current-role')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span>Current Role</span>
-                {openSections['current-role'] ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
-              {openSections['current-role'] && (
+            <div className={getAccordionCardClass(sectionCounts['current-role'])}>
+              {renderAccordionHeader(
+                'current-role',
+                'Current Role',
+                SENIORITY_OPTIONS.length + DEPARTMENT_OPTIONS.length
+              )}
+              {isSectionOpen('current-role') && (
                 <div className="px-3.5 pb-3.5 pt-2 space-y-3 border-t border-slate-200/60 dark:border-slate-800/60">
                   <div>
-                    <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                      Job Title Keyword
-                    </label>
+                    <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                      <label>Job Title Keyword</label>
+                      {countEnteredTerms(filters.roleKeyword) > 0 && (
+                        <span className="font-mono tabular-nums text-[11px] font-semibold text-sky-600 dark:text-sky-400">
+                          {countEnteredTerms(filters.roleKeyword)}
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="text"
                       value={filters.roleKeyword}
@@ -517,9 +636,20 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                   </div>
 
                   <div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mb-1.5">
-                      Seniority Level
-                    </p>
+                    <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1.5">
+                      <span>Seniority Level</span>
+                      <span
+                        className={`font-mono tabular-nums text-[11px] ${
+                          filters.seniorities.length > 0
+                            ? 'font-semibold text-sky-600 dark:text-sky-400'
+                            : 'text-slate-400 dark:text-slate-500'
+                        }`}
+                      >
+                        {filters.seniorities.length > 0
+                          ? `${filters.seniorities.length}/${SENIORITY_OPTIONS.length}`
+                          : SENIORITY_OPTIONS.length}
+                      </span>
+                    </div>
                     <div className="space-y-1.5">
                       {SENIORITY_OPTIONS.map((level) => {
                         const checked = filters.seniorities.includes(level);
@@ -549,9 +679,20 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                   </div>
 
                   <div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mb-1.5">
-                      Department
-                    </p>
+                    <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1.5">
+                      <span>Department</span>
+                      <span
+                        className={`font-mono tabular-nums text-[11px] ${
+                          filters.departments.length > 0
+                            ? 'font-semibold text-sky-600 dark:text-sky-400'
+                            : 'text-slate-400 dark:text-slate-500'
+                        }`}
+                      >
+                        {filters.departments.length > 0
+                          ? `${filters.departments.length}/${DEPARTMENT_OPTIONS.length}`
+                          : DEPARTMENT_OPTIONS.length}
+                      </span>
+                    </div>
                     <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
                       {DEPARTMENT_OPTIONS.map((dept) => {
                         const checked = filters.departments.includes(dept);
@@ -586,23 +727,35 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
           {/* 3. Corporate Email Format Patterns */}
           {matchesQuickFilter(
-            'contact info email format pattern corporate address domain'
+            'contact info email format pattern corporate address domain',
+            EMAIL_FORMULAS.some((f) =>
+              f.label
+                .toLowerCase()
+                .includes(sidebarSearch.trim().toLowerCase())
+            )
           ) && (
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('email-formula')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span>Email Format ({EMAIL_FORMULAS.length} Patterns)</span>
-                {openSections['email-formula'] ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
-              {openSections['email-formula'] && (
+            <div className={getAccordionCardClass(sectionCounts['email-formula'])}>
+              {renderAccordionHeader(
+                'email-formula',
+                'Email Format',
+                EMAIL_FORMULAS.length
+              )}
+              {isSectionOpen('email-formula') && (
                 <div className="px-3.5 pb-3.5 pt-2 space-y-2 border-t border-slate-200/60 dark:border-slate-800/60">
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                    <span>Corporate Pattern</span>
+                    <span
+                      className={`font-mono tabular-nums ${
+                        sectionCounts['email-formula'] > 0
+                          ? 'font-semibold text-sky-600 dark:text-sky-400'
+                          : 'text-slate-400 dark:text-slate-500'
+                      }`}
+                    >
+                      {sectionCounts['email-formula'] > 0
+                        ? `1/${EMAIL_FORMULAS.length}`
+                        : EMAIL_FORMULAS.length}
+                    </span>
+                  </div>
                   <select
                     value={filters.emailFormulaOverride}
                     onChange={(e) =>
@@ -631,21 +784,12 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
           )}
 
           {/* 4. Accuracy Score */}
-          {matchesQuickFilter('accuracy score confidence verified percentage 75 99') && (
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('accuracy-score')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span>Accuracy Score</span>
-                {openSections['accuracy-score'] ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
-              {openSections['accuracy-score'] && (
+          {matchesQuickFilter(
+            'accuracy score confidence verified percentage 75 85 90 99'
+          ) && (
+            <div className={getAccordionCardClass(sectionCounts['accuracy-score'])}>
+              {renderAccordionHeader('accuracy-score', 'Accuracy Score', 4)}
+              {isSectionOpen('accuracy-score') && (
                 <div className="px-3.5 pb-3.5 pt-2 space-y-2.5 border-t border-slate-200/60 dark:border-slate-800/60">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {[
@@ -716,21 +860,22 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
           {/* 5. Company Name */}
           {matchesQuickFilter('company name domain website') && (
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('company-name')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span>Company Name</span>
-                {openSections['company-name'] ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
-              {openSections['company-name'] && (
+            <div className={getAccordionCardClass(sectionCounts['company-name'])}>
+              {renderAccordionHeader('company-name', 'Company Name')}
+              {isSectionOpen('company-name') && (
                 <div className="px-3.5 pb-3.5 pt-2 space-y-2 border-t border-slate-200/60 dark:border-slate-800/60">
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                    <span>Organization or Domain</span>
+                    <span
+                      className={`font-mono tabular-nums ${
+                        sectionCounts['company-name'] > 0
+                          ? 'font-semibold text-sky-600 dark:text-sky-400'
+                          : 'text-slate-400 dark:text-slate-500'
+                      }`}
+                    >
+                      {sectionCounts['company-name']} selected
+                    </span>
+                  </div>
                   <input
                     type="text"
                     value={filters.companyNameFilter}
@@ -760,28 +905,38 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
           {/* 6. Industry (Worldwide Global Company List Trigger, Any | Primary, Full Industry Titles) */}
           {matchesQuickFilter(
-            'industry company sector retail software banking healthcare'
+            'industry company sector retail software banking healthcare',
+            Boolean(sidebarSearch.trim()) && filteredGlobalIndustries.length > 0
           ) && (
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('industry')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span>Industry</span>
-                {openSections.industry ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
+            <div className={getAccordionCardClass(sectionCounts.industry)}>
+              {renderAccordionHeader(
+                'industry',
+                'Industry',
+                globalIndustries.length || undefined
+              )}
 
-              {openSections.industry && (
+              {isSectionOpen('industry') && (
                 <div className="px-3.5 pb-3.5 pt-2.5 space-y-3 border-t border-slate-200/60 dark:border-slate-800/60">
                   <div>
-                    <p className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                      Company Industry
-                    </p>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                        Company Industry
+                      </p>
+                      <span
+                        className={`font-mono tabular-nums text-[11px] ${
+                          filters.selectedIndustrySlugs.length > 0
+                            ? 'font-semibold text-sky-600 dark:text-sky-400'
+                            : 'text-slate-400 dark:text-slate-500'
+                        }`}
+                      >
+                        {filters.selectedIndustrySlugs.length > 0
+                          ? `${filters.selectedIndustrySlugs.length}/${
+                              globalIndustries.length ||
+                              filters.selectedIndustrySlugs.length
+                            }`
+                          : globalIndustries.length || ''}
+                      </span>
+                    </div>
                     <div className="grid grid-cols-2 p-0.5 rounded-lg bg-slate-200/75 dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800">
                       {(['any', 'primary'] as const).map((mode) => {
                         const active = filters.industryMatchMode === mode;
@@ -837,7 +992,8 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                   {filters.selectedIndustrySlugs.length > 0 && (
                     <div className="space-y-1">
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        Selected Worldwide Industry:
+                        Selected Worldwide Industry (
+                        {filters.selectedIndustrySlugs.length}):
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {filters.selectedIndustrySlugs.map((slug) => {
@@ -913,9 +1069,16 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Industry Keywords
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                        Industry Keywords
+                      </label>
+                      {countEnteredTerms(filters.industryKeyword) > 0 && (
+                        <span className="font-mono tabular-nums text-[11px] font-semibold text-sky-600 dark:text-sky-400">
+                          {countEnteredTerms(filters.industryKeyword)}
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="text"
                       value={filters.industryKeyword}
@@ -936,22 +1099,18 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
           {/* 7. Employee Count */}
           {matchesQuickFilter(
-            'employee count size headcount 50 200 500 1000 10000'
+            'employee count size headcount 50 200 500 1000 5000 10000',
+            EMPLOYEE_RANGE_OPTIONS.some((r) =>
+              r.toLowerCase().includes(sidebarSearch.trim().toLowerCase())
+            )
           ) && (
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('employee-count')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span>Employee Count</span>
-                {openSections['employee-count'] ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
-              {openSections['employee-count'] && (
+            <div className={getAccordionCardClass(sectionCounts['employee-count'])}>
+              {renderAccordionHeader(
+                'employee-count',
+                'Employee Count',
+                EMPLOYEE_RANGE_OPTIONS.length
+              )}
+              {isSectionOpen('employee-count') && (
                 <div className="px-3.5 pb-3.5 pt-2 space-y-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
                   {EMPLOYEE_RANGE_OPTIONS.map((range) => {
                     const checked = filters.employeeRanges.includes(range);
@@ -985,29 +1144,18 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
           {/* 8. Company Revenue */}
           {matchesQuickFilter(
-            'company revenue annual sales turnover million billion $1m $10m $50m $100m $1b $10b'
+            'company revenue annual sales turnover million billion $1m $10m $50m $100m $1b $10b',
+            COMPANY_REVENUE_RANGES.some((r) =>
+              r.toLowerCase().includes(sidebarSearch.trim().toLowerCase())
+            )
           ) && (
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('company-revenue')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span className="flex items-center gap-1.5">
-                  <span>Company Revenue</span>
-                  {filters.revenueRanges.length > 0 && (
-                    <span className="font-mono tabular-nums text-sky-600 dark:text-sky-400">
-                      · {filters.revenueRanges.length}
-                    </span>
-                  )}
-                </span>
-                {openSections['company-revenue'] ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
-              {openSections['company-revenue'] && (
+            <div className={getAccordionCardClass(sectionCounts['company-revenue'])}>
+              {renderAccordionHeader(
+                'company-revenue',
+                'Company Revenue',
+                COMPANY_REVENUE_RANGES.length
+              )}
+              {isSectionOpen('company-revenue') && (
                 <div className="px-3.5 pb-3.5 pt-2 space-y-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
                   {COMPANY_REVENUE_RANGES.map((revRange) => {
                     const checked = filters.revenueRanges.includes(revRange);
@@ -1042,39 +1190,25 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
         {/* ==================== LOCATIONS GROUP (ALL 7 CONTINENTS + COUNTRY DROPDOWNS) ==================== */}
         {matchesQuickFilter(
-          'locations continents countries north america europe asia south america africa oceania antarctica city state'
+          'locations continents countries north america europe asia south america africa oceania antarctica city state',
+          Boolean(sidebarSearch.trim()) && filteredContinentsTree.length > 0
         ) && (
           <div className="space-y-2">
             <h3 className="text-xs font-bold tracking-tight text-slate-900 dark:text-white px-0.5">
               Locations
             </h3>
 
-            <div className="rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/70 dark:bg-slate-950/40">
-              <button
-                type="button"
-                onClick={() => toggleSection('locations')}
-                className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
-              >
-                <span className="flex items-center gap-1.5">
-                  <span>Continents &amp; Countries</span>
-                  {filters.selectedContinents.length +
-                    filters.selectedCountries.length >
-                    0 && (
-                    <span className="font-mono tabular-nums text-sky-600 dark:text-sky-400">
-                      ·{' '}
-                      {filters.selectedContinents.length +
-                        filters.selectedCountries.length}
-                    </span>
-                  )}
-                </span>
-                {openSections.locations ? (
-                  <Minus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                )}
-              </button>
+            <div className={getAccordionCardClass(sectionCounts.locations)}>
+              {renderAccordionHeader(
+                'locations',
+                'Continents & Countries',
+                CONTINENTS_CATALOG.reduce(
+                  (sum, c) => sum + c.countries.length,
+                  0
+                )
+              )}
 
-              {openSections.locations && (
+              {isSectionOpen('locations') && (
                 <div className="px-3.5 pb-3.5 pt-2.5 space-y-2.5 border-t border-slate-200/60 dark:border-slate-800/60">
                   {/* Search Continents / Countries */}
                   <div className="relative">
@@ -1131,13 +1265,15 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                   <div className="max-h-64 overflow-y-auto overscroll-contain rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/90 p-1.5 space-y-1">
                     {filteredContinentsTree.map((continent) => {
                       const isExpanded =
-                        Boolean(locationTreeSearch.trim()) ||
+                        Boolean(effectiveLocationSearch) ||
                         Boolean(expandedContinents[continent.id]);
                       const continentChecked =
                         filters.selectedContinents.includes(continent.name);
-                      const checkedCountriesCount = continent.countries.filter(
-                        (c) => filters.selectedCountries.includes(c.name)
-                      ).length;
+                      const checkedCountriesCount = continentChecked
+                        ? continent.countries.length
+                        : continent.countries.filter((c) =>
+                            filters.selectedCountries.includes(c.name)
+                          ).length;
 
                       return (
                         <div key={continent.id} className="rounded-md">
@@ -1181,7 +1317,11 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                               onClick={() =>
                                 toggleContinentDropdown(continent.id)
                               }
-                              className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-slate-500 hover:text-sky-600 dark:hover:text-sky-400 cursor-pointer shrink-0"
+                              className={`font-mono tabular-nums text-[11px] cursor-pointer shrink-0 ${
+                                checkedCountriesCount > 0
+                                  ? 'font-semibold text-sky-600 dark:text-sky-400'
+                                  : 'text-slate-400 dark:text-slate-500 hover:text-sky-600 dark:hover:text-sky-400'
+                              }`}
                             >
                               {checkedCountriesCount > 0
                                 ? `${checkedCountriesCount}/${continent.countries.length}`
@@ -1250,9 +1390,16 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
                   {/* Specific City / State Filter Input */}
                   <div>
-                    <label className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">
-                      Specific City or State
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                        Specific City or State
+                      </label>
+                      {countEnteredTerms(filters.locationQuery) > 0 && (
+                        <span className="font-mono tabular-nums text-[11px] font-semibold text-sky-600 dark:text-sky-400">
+                          {countEnteredTerms(filters.locationQuery)}
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="text"
                       value={filters.locationQuery}
@@ -1312,109 +1459,80 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
             <div className="w-7 h-px bg-slate-200 dark:bg-slate-800 shrink-0" />
 
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('contact-name')}
-              title="Contact Name or Email"
-              aria-label="Filter by Contact Name or Email"
-              className="p-2 rounded-xl text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
-            >
-              <Users className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('current-role')}
-              title="Current Role & Seniority"
-              aria-label="Filter by Current Role"
-              className="p-2 rounded-xl text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
-            >
-              <Briefcase className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('email-formula')}
-              title="Corporate Email Format"
-              aria-label="Corporate Email Format"
-              className="p-2 rounded-xl text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
-            >
-              <Mail className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('accuracy-score')}
-              title="Accuracy Score"
-              aria-label="Filter by Accuracy Score"
-              className="p-2 rounded-xl text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            >
-              <Gauge className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('industry')}
-              title="Worldwide Industry Filter"
-              aria-label="Filter by Worldwide Industry"
-              className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                filters.selectedIndustrySlugs.length > 0
-                  ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
-                  : 'text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800'
-              }`}
-            >
-              <Globe2 className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('employee-count')}
-              title="Employee Count"
-              aria-label="Filter by Employee Count"
-              className="p-2 rounded-xl text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            >
-              <Building2 className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('company-revenue')}
-              title="Company Revenue"
-              aria-label="Filter by Company Revenue"
-              className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                filters.revenueRanges.length > 0
-                  ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
-                  : 'text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800'
-              }`}
-            >
-              <DollarSign className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('locations')}
-              title="Continents & Countries"
-              aria-label="Filter by Continents and Countries"
-              className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                filters.selectedContinents.length +
-                  filters.selectedCountries.length >
-                0
-                  ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
-                  : 'text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800'
-              }`}
-            >
-              <MapPin className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => expandAndFocusSection('company-name')}
-              title="Company Search"
-              aria-label="Filter by Company Name"
-              className="p-2 rounded-xl text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            >
-              <FolderSearch className="h-4 w-4" />
-            </button>
+            {(
+              [
+                {
+                  id: 'contact-name' as AccordionSectionId,
+                  label: 'Contact Name or Email',
+                  Icon: Users,
+                },
+                {
+                  id: 'current-role' as AccordionSectionId,
+                  label: 'Current Role & Seniority',
+                  Icon: Briefcase,
+                },
+                {
+                  id: 'email-formula' as AccordionSectionId,
+                  label: 'Email Format',
+                  Icon: Mail,
+                },
+                {
+                  id: 'accuracy-score' as AccordionSectionId,
+                  label: 'Accuracy Score',
+                  Icon: Gauge,
+                },
+                {
+                  id: 'company-name' as AccordionSectionId,
+                  label: 'Company Name',
+                  Icon: FolderSearch,
+                },
+                {
+                  id: 'industry' as AccordionSectionId,
+                  label: 'Worldwide Industry Filter',
+                  Icon: Globe2,
+                },
+                {
+                  id: 'employee-count' as AccordionSectionId,
+                  label: 'Employee Count',
+                  Icon: Building2,
+                },
+                {
+                  id: 'company-revenue' as AccordionSectionId,
+                  label: 'Company Revenue',
+                  Icon: DollarSign,
+                },
+                {
+                  id: 'locations' as AccordionSectionId,
+                  label: 'Continents & Countries',
+                  Icon: MapPin,
+                },
+              ] as const
+            ).map(({ id, label, Icon }) => {
+              const count = sectionCounts[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => expandAndFocusSection(id)}
+                  title={count > 0 ? `${label} (${count} selected)` : label}
+                  aria-label={
+                    count > 0 ? `${label} (${count} selected)` : label
+                  }
+                  className={`relative p-2 rounded-xl transition-colors cursor-pointer shrink-0 ${
+                    count > 0
+                      ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                      : 'text-slate-500 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {count > 0 && (
+                    <span className="absolute -top-1 -right-1 px-1 min-w-4 h-4 inline-flex items-center justify-center rounded-md bg-sky-600 text-white font-mono tabular-nums text-[10px] font-bold leading-none">
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         ) : (
           renderExpandedBody()

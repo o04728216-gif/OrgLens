@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   Crown,
@@ -13,6 +14,7 @@ import type {
   DepartmentCategory,
   EmployeeRecord,
   FilterExplorerResponse,
+  GlobalCompanyItem,
   SearchResponse,
   SeniorityLevel,
   SeniorityStat,
@@ -20,6 +22,7 @@ import type {
   SidebarFiltersState,
 } from '../types';
 import { applyExcelEmailFormula } from '../utils/emailFormulas';
+import { scrollToListTop } from '../utils/scrollUtils';
 
 interface JobTitleTabProps {
   sessionMode: SessionMode;
@@ -34,6 +37,12 @@ interface JobTitleTabProps {
   onSelectSeniority: (sen: SeniorityLevel | 'All') => void;
   onSwitchToFilterSession: () => void;
   onFocusDomainInput: () => void;
+  filterSelectedCompany?: GlobalCompanyItem | null;
+  filterCompanyResult?: SearchResponse | null;
+  isFilterCompanyLoading?: boolean;
+  onBackToCompaniesList?: () => void;
+  globalPage?: number;
+  onChangeGlobalPage?: (page: number) => void;
 }
 
 const ROLES_PER_PAGE = 500;
@@ -127,16 +136,55 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   onSelectSeniority,
   onSwitchToFilterSession,
   onFocusDomainInput,
+  filterSelectedCompany = null,
+  filterCompanyResult = null,
+  isFilterCompanyLoading = false,
+  onBackToCompaniesList,
+  globalPage = 1,
+  onChangeGlobalPage,
 }) => {
   const [domainRoleFilter, setDomainRoleFilter] = useState('');
   const [filterSessionRoleFilter, setFilterSessionRoleFilter] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [transitioningPage, setTransitioningPage] = useState<number | null>(
+    null
+  );
+  const [requestedServerPage, setRequestedServerPage] = useState<number | null>(
+    null
+  );
+  const listTopRef = useRef<HTMLDivElement>(null);
+  const pageTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pageTimerRef.current !== null) {
+        window.clearTimeout(pageTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFilterLoading) {
+      setRequestedServerPage(null);
+    }
+  }, [isFilterLoading]);
+
+  const isViewingFilterCompany =
+    sessionMode === 'filter' && Boolean(filterSelectedCompany);
+  const activeSingleCompanyResult =
+    sessionMode === 'domain'
+      ? domainResult
+      : isViewingFilterCompany
+      ? filterCompanyResult
+      : null;
 
   useEffect(() => {
     setCurrentPage(1);
   }, [
     sessionMode,
     domainResult?.domain,
+    filterSelectedCompany?.slug,
+    filterCompanyResult?.domain,
     filterResult?.fetchedAt,
     selectedDepartment,
     selectedSeniority,
@@ -153,10 +201,12 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     setCurrentPage(1);
   };
 
-  // Resolve session-specific source employees (Domain Session stays 100% isolated from Sidebar Filters)
+  // Resolve session-specific source employees (Domain Session & Filter Selected Company use whole roster)
   const sessionEmployees = useMemo<EmployeeRecord[]>(() => {
-    if (sessionMode === 'domain') {
-      return domainResult ? domainResult.employees : [];
+    if (sessionMode === 'domain' || isViewingFilterCompany) {
+      return activeSingleCompanyResult
+        ? activeSingleCompanyResult.employees
+        : [];
     }
     if (!filterResult) return [];
 
@@ -212,7 +262,8 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     });
   }, [
     sessionMode,
-    domainResult,
+    isViewingFilterCompany,
+    activeSingleCompanyResult,
     filterResult,
     filters.minAccuracy,
     filters.maxAccuracy,
@@ -280,9 +331,31 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     sessionMode,
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / ROLES_PER_PAGE));
-  const safePage = Math.min(currentPage, totalPages);
-  const pageStartIndex = (safePage - 1) * ROLES_PER_PAGE;
+  const localTotalPages = Math.max(
+    1,
+    Math.ceil(filtered.length / ROLES_PER_PAGE)
+  );
+  const useServerBatchPagination =
+    sessionMode === 'filter' &&
+    !isViewingFilterCompany &&
+    localTotalPages <= 1 &&
+    selectedDepartment === 'All' &&
+    selectedSeniority === 'All' &&
+    !roleFilter.trim() &&
+    (filterResult?.totalPages || 1) > 1 &&
+    Boolean(onChangeGlobalPage);
+
+  const totalPages = useServerBatchPagination
+    ? Math.max(1, filterResult?.totalPages || 1)
+    : localTotalPages;
+
+  const safePage = useServerBatchPagination
+    ? Math.min(globalPage, totalPages)
+    : Math.min(currentPage, totalPages);
+
+  const pageStartIndex = useServerBatchPagination
+    ? 0
+    : (safePage - 1) * ROLES_PER_PAGE;
 
   const displayed = useMemo(
     () => filtered.slice(pageStartIndex, pageStartIndex + ROLES_PER_PAGE),
@@ -302,16 +375,65 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     return Array.from({ length: end - start + 1 }, (_, i) => start + i);
   }, [totalPages, safePage]);
 
+  const isPaginationLoading = useServerBatchPagination
+    ? isFilterLoading &&
+      (requestedServerPage !== null ||
+        Boolean(filterResult && filterResult.page !== globalPage))
+    : transitioningPage !== null;
+
+  const targetPaginationPage = useServerBatchPagination
+    ? requestedServerPage ?? globalPage
+    : transitioningPage ?? safePage;
+
+  const handleSelectRolesPage = (nextPage: number) => {
+    const bounded = Math.max(1, Math.min(totalPages, nextPage));
+    scrollToListTop(listTopRef.current);
+
+    if (useServerBatchPagination && onChangeGlobalPage) {
+      if (bounded === globalPage && !isPaginationLoading) return;
+      setRequestedServerPage(bounded);
+      onChangeGlobalPage(bounded);
+      return;
+    }
+
+    if (bounded === safePage && transitioningPage === null) return;
+    if (pageTimerRef.current !== null) {
+      window.clearTimeout(pageTimerRef.current);
+    }
+    setTransitioningPage(bounded);
+    pageTimerRef.current = window.setTimeout(() => {
+      setCurrentPage(bounded);
+      setTransitioningPage(null);
+      pageTimerRef.current = null;
+    }, 220);
+  };
+
   const isInitialLoading =
     sessionMode === 'domain'
       ? isDomainLoading
+      : isViewingFilterCompany
+      ? isFilterCompanyLoading
       : isFilterLoading && !filterResult;
 
   if (isInitialLoading) {
     return (
-      <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-        <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
-        <span>Indexing organizational command hierarchy and authority tiers...</span>
+      <div className="space-y-4">
+        {isViewingFilterCompany && onBackToCompaniesList && (
+          <div className="pb-3 border-b border-slate-200/80 dark:border-slate-800/80">
+            <button
+              type="button"
+              onClick={onBackToCompaniesList}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Companies List
+            </button>
+          </div>
+        )}
+        <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
+          <span>Indexing organizational command hierarchy and authority tiers...</span>
+        </div>
       </div>
     );
   }
@@ -349,7 +471,26 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   }
 
   return (
-    <div className="space-y-5">
+    <div ref={listTopRef} className="space-y-5 scroll-mt-24">
+      {isViewingFilterCompany && filterSelectedCompany && onBackToCompaniesList && (
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200/80 dark:border-slate-800/80">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={onBackToCompaniesList}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Companies List
+            </button>
+            <span className="font-display text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+              {activeSingleCompanyResult?.companyName ||
+                filterSelectedCompany.name}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Exact 4-Tier Seniority Distribution Cards (Executive, Director / VP, Lead / Senior, Individual Contributor) */}
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 px-0.5">
@@ -358,11 +499,12 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
             <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
               {cohortBeforeSenioritySelection.length.toLocaleString()}
             </strong>{' '}
-            {sessionMode === 'domain' && domainResult
-              ? `${domainResult.companyName} roles`
+            {(sessionMode === 'domain' || isViewingFilterCompany) &&
+            activeSingleCompanyResult
+              ? `${activeSingleCompanyResult.companyName} roles`
               : 'filtered roles'}
           </span>
-          {sessionMode === 'filter' && isFilterLoading && (
+          {sessionMode === 'filter' && !isViewingFilterCompany && isFilterLoading && (
             <span className="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400 font-medium">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Refreshing hierarchy...
@@ -472,6 +614,25 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
         </span>
       </div>
 
+      {isPaginationLoading && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl border border-sky-500/40 bg-sky-500/10 dark:bg-sky-500/15 text-xs font-semibold text-sky-800 dark:text-sky-200"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
+            <span>
+              Loading page {targetPaginationPage.toLocaleString()} of{' '}
+              {totalPages.toLocaleString()}...
+            </span>
+          </span>
+          <span className="font-mono tabular-nums text-[11px] text-sky-700/85 dark:text-sky-300/85">
+            500 roles/page
+          </span>
+        </div>
+      )}
+
       {/* Ranked Command Hierarchy HTML <table> */}
       {filtered.length === 0 ? (
         <div className="py-10 px-4 text-center rounded-xl border border-slate-200/80 dark:border-slate-800/80">
@@ -480,111 +641,146 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/55 dark:bg-slate-950/35">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/75 dark:bg-slate-900/75 text-xs font-semibold text-slate-600 dark:text-slate-300">
-                <th scope="col" className="py-3 px-4 w-16 font-mono">
-                  Rank
-                </th>
-                <th scope="col" className="py-3 px-4">
-                  Role &amp; Authority
-                </th>
-                <th scope="col" className="py-3 px-4">
-                  Full Name
-                </th>
-                {sessionMode === 'filter' && (
-                  <th scope="col" className="py-3 px-4 hidden sm:table-cell">
-                    Organization
+        <div className="relative rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/55 dark:bg-slate-950/35">
+          {isPaginationLoading && (
+            <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex justify-center px-4">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl backdrop-blur-md bg-white/95 dark:bg-slate-900/95 border border-sky-500/40 shadow-sm text-xs font-semibold text-slate-900 dark:text-white">
+                <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
+                <span>
+                  Loading page {targetPaginationPage.toLocaleString()}...
+                </span>
+              </div>
+            </div>
+          )}
+          <div
+            className={`overflow-x-auto rounded-xl transition-opacity duration-150 ${
+              isPaginationLoading ? 'opacity-45 pointer-events-none' : 'opacity-100'
+            }`}
+          >
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/75 dark:bg-slate-900/75 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  <th scope="col" className="py-3 px-4 w-16 font-mono">
+                    Rank
                   </th>
-                )}
-                <th scope="col" className="py-3 px-4 hidden md:table-cell">
-                  Department
-                </th>
-                <th scope="col" className="py-3 px-4 w-24 text-right">
-                  Link
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm">
-              {displayed.map((emp) => (
-                <tr
-                  key={emp.id}
-                  className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
-                >
-                  <td className="py-2.5 px-4 font-mono tabular-nums text-xs text-slate-400 dark:text-slate-500">
-                    {emp.displayRank}
-                  </td>
-                  <td className="py-2.5 px-4">
-                    <div className="font-semibold text-slate-900 dark:text-slate-100">
-                      {emp.jobTitle}
-                    </div>
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                      {emp.seniority}
-                    </div>
-                  </td>
-                  <td className="py-2.5 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                    {emp.fullName}
-                  </td>
+                  <th scope="col" className="py-3 px-4">
+                    Role &amp; Authority
+                  </th>
+                  <th scope="col" className="py-3 px-4">
+                    Full Name
+                  </th>
                   {sessionMode === 'filter' && (
-                    <td className="py-2.5 px-4 text-xs text-slate-600 dark:text-slate-300 hidden sm:table-cell whitespace-nowrap">
-                      {emp.companyName || emp.domain}
-                    </td>
+                    <th scope="col" className="py-3 px-4 hidden sm:table-cell">
+                      Organization
+                    </th>
                   )}
-                  <td className="py-2.5 px-4 text-xs text-slate-500 dark:text-slate-400 hidden md:table-cell whitespace-nowrap">
-                    {emp.department}
-                  </td>
-                  <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                    <a
-                      href={emp.profileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-medium text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300 transition-colors"
-                    >
-                      View
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  </td>
+                  <th scope="col" className="py-3 px-4 hidden md:table-cell">
+                    Department
+                  </th>
+                  <th scope="col" className="py-3 px-4 w-24 text-right">
+                    Link
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm">
+                {displayed.map((emp) => (
+                  <tr
+                    key={emp.id}
+                    className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
+                  >
+                    <td className="py-2.5 px-4 font-mono tabular-nums text-xs text-slate-400 dark:text-slate-500">
+                      {emp.displayRank}
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <div className="font-semibold text-slate-900 dark:text-slate-100">
+                        {emp.jobTitle}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {emp.seniority}
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                      {emp.fullName}
+                    </td>
+                    {sessionMode === 'filter' && (
+                      <td className="py-2.5 px-4 text-xs text-slate-600 dark:text-slate-300 hidden sm:table-cell whitespace-nowrap">
+                        {emp.companyName || emp.domain}
+                      </td>
+                    )}
+                    <td className="py-2.5 px-4 text-xs text-slate-500 dark:text-slate-400 hidden md:table-cell whitespace-nowrap">
+                      {emp.department}
+                    </td>
+                    <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                      <a
+                        href={emp.profileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300 transition-colors"
+                      >
+                        View
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {totalPages > 1 && (
         <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
           <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-            Page {safePage.toLocaleString()} of {totalPages.toLocaleString()} · 500/page
+            {isPaginationLoading ? (
+              <span className="inline-flex items-center gap-1.5 font-sans font-semibold text-sky-600 dark:text-sky-400">
+                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                Loading page {targetPaginationPage.toLocaleString()} of{' '}
+                {totalPages.toLocaleString()}...
+              </span>
+            ) : (
+              <>
+                Page {safePage.toLocaleString()} of{' '}
+                {totalPages.toLocaleString()} · 500/page
+              </>
+            )}
           </span>
           <div className="flex items-center gap-1 flex-wrap">
             <button
               type="button"
-              disabled={safePage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1 || isPaginationLoading}
+              onClick={() => handleSelectRolesPage(safePage - 1)}
               aria-label="Previous roles page"
               className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>
-            {visiblePageNumbers.map((pg) => (
-              <button
-                key={pg}
-                type="button"
-                onClick={() => setCurrentPage(pg)}
-                className={`min-w-8 h-8 px-2 rounded-lg text-xs font-mono tabular-nums font-medium transition-colors cursor-pointer ${
-                  pg === safePage
-                    ? 'bg-sky-600 text-white'
-                    : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                {pg}
-              </button>
-            ))}
+            {visiblePageNumbers.map((pg) => {
+              const isTargetLoading =
+                isPaginationLoading && pg === targetPaginationPage;
+              return (
+                <button
+                  key={pg}
+                  type="button"
+                  disabled={isPaginationLoading}
+                  onClick={() => handleSelectRolesPage(pg)}
+                  className={`inline-flex items-center justify-center gap-1.5 min-w-8 h-8 px-2 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors cursor-pointer ${
+                    pg === safePage || isTargetLoading
+                      ? 'bg-sky-600 text-white shadow-xs'
+                      : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {isTargetLoading && (
+                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                  )}
+                  <span>{pg}</span>
+                </button>
+              );
+            })}
             <button
               type="button"
-              disabled={safePage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages || isPaginationLoading}
+              onClick={() => handleSelectRolesPage(safePage + 1)}
               aria-label="Next roles page"
               className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
             >
