@@ -121,10 +121,6 @@ export const DomainIndustryProfile: React.FC<DomainIndustryProfileProps> = ({
                 </span>
               </>
             )}
-            <span aria-hidden="true">·</span>
-            <span className="font-mono text-sky-700 dark:text-sky-400">
-              Email Format: {domainResult.emailPattern.formulaLabel}
-            </span>
           </div>
           {domainResult.companyDescription && (
             <p className="pt-1 text-sm text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
@@ -240,7 +236,7 @@ export const DomainIndustryProfile: React.FC<DomainIndustryProfileProps> = ({
                       <td className="py-2.5 px-4 font-medium text-slate-900 dark:text-slate-100 whitespace-nowrap">
                         <div>{snap.companyName}</div>
                         <div className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                          {snap.domain} · {snap.emailPattern.formulaLabel}
+                          {snap.domain}
                         </div>
                       </td>
                       <td

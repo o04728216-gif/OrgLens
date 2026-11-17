@@ -11,7 +11,6 @@ import {
   Gauge,
   Globe2,
   Loader2,
-  Mail,
   MapPin,
   Search,
   SlidersHorizontal,
@@ -69,7 +68,6 @@ const COLLAPSED_SECTION_ICONS: ReadonlyArray<{
 }> = [
   { id: 'contact-name', label: 'Contact Name or Email', Icon: Users },
   { id: 'current-role', label: 'Current Role & Seniority', Icon: Briefcase },
-  { id: 'email-formula', label: 'Email Format', Icon: Mail },
   { id: 'accuracy-score', label: 'Accuracy Score', Icon: Gauge },
   { id: 'company-name', label: 'Company Name', Icon: FolderSearch },
   { id: 'industry', label: 'Worldwide Industry Filter', Icon: Globe2 },
@@ -106,7 +104,6 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   >({
     'contact-name': false,
     'current-role': false,
-    'email-formula': false,
     'accuracy-score': false,
     'company-name': false,
     industry: false,

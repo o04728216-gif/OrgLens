@@ -193,7 +193,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
                   onClick={() =>
                     onRefreshCurrentDomain(currentDomainResult.domain)
                   }
-                  title="Force fresh full-organization & live web email format detection"
+                  title="Refresh organization directory and verified contacts"
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border border-slate-200/90 dark:border-slate-800 bg-white/80 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   Refresh

@@ -1,14 +1,19 @@
 import type {
+  AdminSectionId,
   DepartmentCategory,
   GlobalCompanyItem,
   PrimaryTab,
   SeniorityLevel,
   SessionMode,
   SidebarFiltersState,
+  TopLevelAppView,
 } from '../types';
 import { EMAIL_FORMULAS, type EmailFormulaId } from './emailFormulas';
 
 export interface UrlRoutedState {
+  appView: TopLevelAppView;
+  authMode: 'login' | 'signup';
+  adminSection: AdminSectionId;
   sessionMode: SessionMode;
   activeTab: PrimaryTab;
   activeDomain: string | null;
@@ -22,6 +27,18 @@ export interface UrlRoutedState {
   filterSelectedCompany: GlobalCompanyItem | null;
   showWidgetsDrawer: boolean;
 }
+
+const VALID_ADMIN_SECTIONS = new Set<AdminSectionId>([
+  'overview',
+  'users',
+  'devices',
+  'payments',
+  'directory-overrides',
+  'ledger',
+  'vouchers',
+  'settings',
+  'system',
+]);
 
 const VALID_DEPARTMENTS = new Set<DepartmentCategory>([
   'Leadership',
@@ -62,7 +79,10 @@ function humanizeSlug(slug: string): string {
     .join(' ');
 }
 
-function parseTabSegment(seg: string | undefined, session: SessionMode): PrimaryTab {
+function parseTabSegment(
+  seg: string | undefined,
+  session: SessionMode
+): PrimaryTab {
   const clean = (seg || '').trim().toLowerCase();
   if (clean === 'command-hierarchy' || clean === 'hierarchy') {
     return 'command-hierarchy';
@@ -70,7 +90,11 @@ function parseTabSegment(seg: string | undefined, session: SessionMode): Primary
   if (clean === 'companies' || clean === 'industry') {
     return 'industry';
   }
-  if (clean === 'full-names-emails' || clean === 'contacts' || clean === 'emails') {
+  if (
+    clean === 'full-names-emails' ||
+    clean === 'contacts' ||
+    clean === 'emails'
+  ) {
     return 'full-names-emails';
   }
   return session === 'filter' ? 'industry' : 'full-names-emails';
@@ -93,6 +117,9 @@ export function parseUrlToAppState(
     .filter(Boolean);
   const sp = new URLSearchParams(loc.search);
 
+  let appView: TopLevelAppView = 'workspace';
+  let authMode: 'login' | 'signup' = 'login';
+  let adminSection: AdminSectionId = 'overview';
   let sessionMode: SessionMode = 'domain';
   let activeTab: PrimaryTab = 'full-names-emails';
   let activeDomain: string | null = null;
@@ -100,7 +127,37 @@ export function parseUrlToAppState(
 
   const first = (segments[0] || '').toLowerCase();
 
-  if (first === 'filter-explorer' || first === 'explorer' || first === 'companies') {
+  if (!first) {
+    appView = 'landing';
+    authMode = sp.get('auth') === 'signup' ? 'signup' : 'login';
+  } else if (first === 'login' || first === 'signin') {
+    appView = 'landing';
+    authMode = 'login';
+  } else if (first === 'signup' || first === 'register') {
+    appView = 'landing';
+    authMode = 'signup';
+  } else if (
+    first === 'profile' ||
+    first === 'settings' ||
+    first === 'account'
+  ) {
+    appView = 'profile';
+  } else if (
+    first === 'upgrade' ||
+    first === 'billing' ||
+    first === 'lens-coins'
+  ) {
+    appView = 'upgrade';
+  } else if (first === 'admin') {
+    appView = 'admin';
+    const rawSec = (segments[1] || 'overview').toLowerCase() as AdminSectionId;
+    adminSection = VALID_ADMIN_SECTIONS.has(rawSec) ? rawSec : 'overview';
+  } else if (
+    first === 'filter-explorer' ||
+    first === 'explorer' ||
+    first === 'companies'
+  ) {
+    appView = 'workspace';
     sessionMode = 'filter';
     const second = (segments[1] || '').toLowerCase();
 
@@ -112,7 +169,8 @@ export function parseUrlToAppState(
       const qDomain = sanitizeDomainSegment(sp.get('domain') || '');
       const resolvedDomain =
         qDomain && qDomain.includes('.') ? qDomain : `${companySlug}.com`;
-      const companyName = (sp.get('name') || '').trim() || humanizeSlug(companySlug);
+      const companyName =
+        (sp.get('name') || '').trim() || humanizeSlug(companySlug);
 
       filterSelectedCompany = {
         id: companySlug,
@@ -133,6 +191,7 @@ export function parseUrlToAppState(
       );
     }
   } else if (first === 'domain-lookup' || first === 'domain') {
+    appView = 'workspace';
     sessionMode = 'domain';
     const second = segments[1] || '';
     const secondLower = second.toLowerCase();
@@ -150,13 +209,12 @@ export function parseUrlToAppState(
       activeTab = parseTabSegment(second, 'domain');
     }
   } else if (first && first.includes('.')) {
-    // Support direct shorthand URL like `/shopify.com` or `/shopify.com/command-hierarchy`
+    appView = 'workspace';
     sessionMode = 'domain';
     activeDomain = sanitizeDomainSegment(first);
     activeTab = parseTabSegment(segments[1], 'domain');
   }
 
-  // Parse Sidebar Filters from query parameters
   const industriesParam = sp.get('industries') || sp.get('slugs') || '';
   const selectedIndustrySlugs = industriesParam
     .split(',')
@@ -170,7 +228,9 @@ export function parseUrlToAppState(
   const seniorities = (sp.get('seniorities') || '')
     .split('|')
     .map((s) => s.trim())
-    .filter((s): s is SeniorityLevel => VALID_SENIORITIES.has(s as SeniorityLevel));
+    .filter((s): s is SeniorityLevel =>
+      VALID_SENIORITIES.has(s as SeniorityLevel)
+    );
 
   const departments = (sp.get('depts') || '')
     .split('|')
@@ -227,7 +287,6 @@ export function parseUrlToAppState(
     locationQuery: sp.get('loc') || '',
   };
 
-  // Pagination & Batch parameters
   const rawPage = Math.max(1, parseInt(sp.get('page') || '1', 10) || 1);
   const rawBatch = Math.max(1, parseInt(sp.get('batch') || '0', 10) || 0);
 
@@ -271,6 +330,9 @@ export function parseUrlToAppState(
   const showWidgetsDrawer = sp.get('panel') === 'widgets-sync';
 
   return {
+    appView,
+    authMode,
+    adminSection,
     sessionMode,
     activeTab,
     activeDomain,
@@ -287,6 +349,21 @@ export function parseUrlToAppState(
 }
 
 export function buildUrlFromAppState(state: UrlRoutedState): string {
+  if (state.appView === 'landing') {
+    return state.authMode === 'signup' ? '/signup' : '/';
+  }
+  if (state.appView === 'profile') {
+    return '/settings';
+  }
+  if (state.appView === 'upgrade') {
+    return '/upgrade';
+  }
+  if (state.appView === 'admin') {
+    return state.adminSection === 'overview'
+      ? '/admin'
+      : `/admin/${state.adminSection}`;
+  }
+
   const sp = new URLSearchParams();
   let pathname = '/domain-lookup/full-names-emails';
 
@@ -318,7 +395,6 @@ export function buildUrlFromAppState(state: UrlRoutedState): string {
       }
     }
   } else {
-    // Filter Explorer Session
     if (state.filterSelectedCompany && state.activeTab !== 'industry') {
       const slug = state.filterSelectedCompany.slug || 'organization';
       const tabSlug = formatTabSegment(state.activeTab, 'domain');
@@ -374,7 +450,6 @@ export function buildUrlFromAppState(state: UrlRoutedState): string {
       }
     }
 
-    // Include active Filter Explorer filters in query string so any filtered view URL is 100% shareable & bookmarkable
     const f = state.filters;
     if (f.selectedIndustrySlugs.length > 0) {
       sp.set('industries', f.selectedIndustrySlugs.join(','));
@@ -424,6 +499,21 @@ export function buildDocumentTitle(
   state: UrlRoutedState,
   companyDisplayName?: string
 ): string {
+  if (state.appView === 'landing') {
+    return state.authMode === 'login'
+      ? 'Sign In · Corporate Email Intelligence | OrgLens'
+      : 'OrgLens · B2B Corporate Email Finder & Worldwide Company Explorer';
+  }
+  if (state.appView === 'profile') {
+    return 'Profile & Account Settings | OrgLens';
+  }
+  if (state.appView === 'upgrade') {
+    return 'Lens Coins & $15/mo USDT (TRC20) Unlimited Upgrade | OrgLens';
+  }
+  if (state.appView === 'admin') {
+    return `Admin Console · ${humanizeSlug(state.adminSection)} | OrgLens`;
+  }
+
   const tabLabel =
     state.activeTab === 'industry'
       ? state.sessionMode === 'filter'

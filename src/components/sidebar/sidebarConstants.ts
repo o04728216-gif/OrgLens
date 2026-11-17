@@ -35,7 +35,6 @@ export const EMPLOYEE_RANGE_OPTIONS = [
 export type AccordionSectionId =
   | 'contact-name'
   | 'current-role'
-  | 'email-formula'
   | 'accuracy-score'
   | 'company-name'
   | 'industry'
@@ -90,7 +89,6 @@ export function getSidebarSectionSelectedCounts(
       countEnteredTerms(f.roleKeyword) +
       f.seniorities.length +
       f.departments.length,
-    'email-formula': f.emailFormulaOverride !== 'auto' ? 1 : 0,
     'accuracy-score': f.minAccuracy > 50 || f.maxAccuracy < 99 ? 1 : 0,
     'company-name': countEnteredTerms(f.companyNameFilter),
     industry:

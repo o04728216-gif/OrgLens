@@ -1,7 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Building2, Crown, Users } from 'lucide-react';
+import { Building2, Crown, Loader2, Megaphone, Users } from 'lucide-react';
 import type {
+  AdminSectionId,
   DepartmentCategory,
   FilterExplorerResponse,
   GlobalCompaniesResponse,
@@ -12,6 +19,7 @@ import type {
   SeniorityLevel,
   SessionMode,
   SidebarFiltersState,
+  TopLevelAppView,
   WidgetConfig,
   WidgetId,
 } from './types';
@@ -36,6 +44,8 @@ import { applyExcelEmailFormula } from './utils/emailFormulas';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import { useOfflineSyncQueue } from './hooks/useOfflineSyncQueue';
 import { useUrlRouterSync } from './hooks/useUrlRouterSync';
+import { usePlatformAuth } from './hooks/usePlatformAuth';
+import { apiFetch } from './utils/authClient';
 import { scrollToListTop } from './utils/scrollUtils';
 import { parseUrlToAppState, type UrlRoutedState } from './utils/urlRouter';
 import {
@@ -46,9 +56,12 @@ import {
   HeroDomainSearchSection,
   type StatusBannerState,
 } from './components/layout/HeroDomainSearchSection';
-import { RouteAddressBar } from './components/layout/RouteAddressBar';
 import { SessionAndTabsBar } from './components/layout/SessionAndTabsBar';
 import { WidgetsDrawerBoard } from './components/layout/WidgetsDrawerBoard';
+import { B2BLandingAuthPage } from './components/landing/B2BLandingAuthPage';
+import { UsdtUpgradePage } from './components/billing/UsdtUpgradePage';
+import { AdminDashboardPage } from './components/admin/AdminDashboardPage';
+import { UserProfileSettingsPage } from './components/account/UserProfileSettingsPage';
 
 function sanitizeClientDomain(input: string): string {
   return input
@@ -66,6 +79,9 @@ export default function App() {
   const initialRoute = useMemo<UrlRoutedState>(() => {
     if (typeof window === 'undefined') {
       return {
+        appView: 'landing',
+        authMode: 'login',
+        adminSection: 'overview',
         sessionMode: 'domain',
         activeTab: 'full-names-emails',
         activeDomain: null,
@@ -84,7 +100,20 @@ export default function App() {
   }, []);
 
   const [theme, setTheme] = useState<'dark' | 'light'>(() => loadSavedTheme());
-  const [activeTab, setActiveTab] = useState<PrimaryTab>(initialRoute.activeTab);
+  const [appView, setAppView] = useState<TopLevelAppView>(initialRoute.appView);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>(
+    initialRoute.authMode
+  );
+  const [adminSection, setAdminSection] = useState<AdminSectionId>(
+    initialRoute.adminSection
+  );
+  const [exhaustedCoinsPrompt, setExhaustedCoinsPrompt] = useState<
+    string | null
+  >(null);
+
+  const [activeTab, setActiveTab] = useState<PrimaryTab>(
+    initialRoute.activeTab
+  );
   const [sessionMode, setSessionMode] = useState<SessionMode>(
     initialRoute.sessionMode
   );
@@ -177,9 +206,69 @@ export default function App() {
     loadWidgetConfigs()
   );
 
+  // Tracks companies already settled for the current logged-in user in this browser tab
+  const sessionSettledKeysRef = useRef<Set<string>>(new Set());
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const resultsTopRef = useRef<HTMLDivElement>(null);
   const { isInstallable, install } = usePWAInstall();
+
+  const {
+    user,
+    publicConfig,
+    coinLedger,
+    usdtOrders,
+    authInitializing,
+    sessionDisplacedNotice,
+    clearSessionDisplacedNotice,
+    login,
+    signup,
+    logout,
+    refreshAccount,
+    fetchPublicConfig,
+    applySearchCoinMeta,
+    applyExactCoinBalance,
+    submitUsdtPayment,
+    redeemVoucher,
+    updateProfile,
+    changePassword,
+    rotateSession,
+  } = usePlatformAuth(appView === 'admin');
+
+  // Clear settled cache whenever logged-in user ID changes
+  useEffect(() => {
+    sessionSettledKeysRef.current.clear();
+  }, [user?.id]);
+
+  // If single-device lock displaces this browser session, return cleanly to Sign In
+  useEffect(() => {
+    if (sessionDisplacedNotice && !user && appView !== 'admin') {
+      sessionSettledKeysRef.current.clear();
+      setAppView('landing');
+      setAuthMode('login');
+    }
+  }, [sessionDisplacedNotice, user, appView]);
+
+  // Automatically route authenticated users from `/` or `/login` into Workspace
+  useEffect(() => {
+    if (!authInitializing && user && appView === 'landing') {
+      setAppView('workspace');
+      if (
+        user.preferences?.defaultSessionMode === 'filter' &&
+        !activeDomain &&
+        !filterSelectedCompany
+      ) {
+        setSessionMode('filter');
+        setActiveTab('industry');
+      }
+    }
+  }, [
+    authInitializing,
+    user,
+    appView,
+    activeDomain,
+    filterSelectedCompany,
+  ]);
 
   const handleSyncedResults = useCallback((results: SearchResponse[]) => {
     setSnapshots((prev) => {
@@ -204,6 +293,7 @@ export default function App() {
     syncPendingQueue,
   } = useOfflineSyncQueue({
     onSyncedResults: handleSyncedResults,
+    onBalanceUpdated: applyExactCoinBalance,
     setActiveDomain,
     setSessionMode,
     setStatusBanner,
@@ -228,10 +318,10 @@ export default function App() {
   }, [widgets]);
 
   useEffect(() => {
-    if (effectiveOffline) return;
+    if (effectiveOffline || !user) return;
     let cancelled = false;
     setIndustriesLoading(true);
-    fetch('/api/industries')
+    apiFetch('/api/industries')
       .then((r) => (r.ok ? r.json() : null))
       .then((payload) => {
         if (!cancelled && Array.isArray(payload?.industries)) {
@@ -247,7 +337,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveOffline]);
+  }, [effectiveOffline, user]);
 
   const activeFilterCount = useMemo(
     () => countActiveSidebarFilters(filters),
@@ -296,7 +386,7 @@ export default function App() {
   const selectedRevRangesKey = filters.revenueRanges.join('|');
 
   useEffect(() => {
-    if (effectiveOffline) return;
+    if (effectiveOffline || !user || appView !== 'workspace') return;
     if (sessionMode !== 'filter' && activeFilterCount === 0) {
       return;
     }
@@ -344,7 +434,7 @@ export default function App() {
     params.set('emailFormulaOverride', filters.emailFormulaOverride);
     params.set('page', String(globalPage));
 
-    fetch(`/api/filter-explorer?${params.toString()}`, {
+    apiFetch(`/api/filter-explorer?${params.toString()}`, {
       signal: controller.signal,
     })
       .then((r) => (r.ok ? r.json() : null))
@@ -380,6 +470,8 @@ export default function App() {
       controller.abort();
     };
   }, [
+    user,
+    appView,
     sessionMode,
     activeFilterCount,
     selectedSlugsKey,
@@ -399,6 +491,7 @@ export default function App() {
   const handleChangeFilters = useCallback(
     (updater: (prev: SidebarFiltersState) => SidebarFiltersState) => {
       setFilters(updater);
+      setAppView('workspace');
       filterCompanyAbortRef.current?.abort();
       setIsFilterCompanyLoading(false);
       setFilterSelectedCompany(null);
@@ -430,8 +523,9 @@ export default function App() {
     const qRole = filters.roleKeyword.trim().toLowerCase();
 
     return filterExplorerResult.employees.filter((emp) => {
+      const isMasked = emp.email.includes('*');
       const resolvedEmail =
-        filters.emailFormulaOverride === 'auto'
+        isMasked || filters.emailFormulaOverride === 'auto'
           ? emp.email
           : applyExcelEmailFormula(
               emp.fullName,
@@ -526,12 +620,12 @@ export default function App() {
           filters.emailFormulaOverride === 'auto'
             ? 'first_dot_last'
             : filters.emailFormulaOverride,
-        formulaLabel: 'Unique Auto-Detected Per Company',
+        formulaLabel: 'Verified Corporate Directory',
         excelFormula: '',
         patternConfidence: 88,
         mxVerified: true,
         mxProvider: 'Multi-Domain Verified',
-        detectionBasis: 'Live Web Pattern Intelligence',
+        detectionBasis: 'Live Web Verification',
         sampleObservedEmails: [],
       },
       sourcesUsed: ['Org Chart'],
@@ -568,6 +662,7 @@ export default function App() {
         return;
       }
 
+      setAppView('workspace');
       setSessionMode('domain');
       if (domain) {
         setDomainInput(domain);
@@ -582,9 +677,18 @@ export default function App() {
       const hasValidSnapshot =
         Boolean(existingSnapshot) &&
         (existingSnapshot?.employees.length || 0) > 0;
+      const alreadySettledThisSession = Boolean(
+        domain && sessionSettledKeysRef.current.has(`dom:${domain}`)
+      );
 
       if (effectiveOffline) {
-        if (domain && hasValidSnapshot && existingSnapshot && !forceRefresh) {
+        if (
+          domain &&
+          hasValidSnapshot &&
+          existingSnapshot &&
+          alreadySettledThisSession &&
+          !forceRefresh
+        ) {
           setActiveDomain(domain);
           setActiveTab('full-names-emails');
           setStatusBanner({
@@ -608,7 +712,7 @@ export default function App() {
         return;
       }
 
-      if (domain && !forceRefresh && hasValidSnapshot) {
+      if (domain && !forceRefresh && hasValidSnapshot && alreadySettledThisSession) {
         setActiveDomain(domain);
         setStatusBanner(null);
         return;
@@ -622,10 +726,23 @@ export default function App() {
         const queryParams = new URLSearchParams();
         if (domain) queryParams.set('domain', domain);
         if (companySlug) queryParams.set('companySlug', companySlug);
+        queryParams.set('source', 'domain');
         if (forceRefresh) queryParams.set('refresh', 'true');
 
-        const res = await fetch(`/api/search?${queryParams.toString()}`);
+        const res = await apiFetch(`/api/search?${queryParams.toString()}`);
         const payload = await res.json();
+
+        if (res.status === 402 || payload?.code === 'INSUFFICIENT_COINS') {
+          if (typeof payload?.balanceRemaining === 'number') {
+            applyExactCoinBalance(payload.balanceRemaining);
+          }
+          setExhaustedCoinsPrompt(
+            payload?.error ||
+              `You have consumed all ${publicConfig.defaultSignupCoins} Lens Coins. Upgrade for $${publicConfig.unlimitedMonthlyPriceUsdt}/month in USDT (TRC20) for unlimited company emails.`
+          );
+          setAppView('upgrade');
+          return;
+        }
 
         if (!res.ok) {
           throw new Error(
@@ -634,23 +751,30 @@ export default function App() {
         }
 
         const data = payload as SearchResponse;
+        applySearchCoinMeta(data.coinMeta);
+
         if (data.employees.length > 0) {
+          sessionSettledKeysRef.current.add(`dom:${data.domain}`);
+          if (data.companySlug) {
+            sessionSettledKeysRef.current.add(`slug:${data.companySlug}`);
+          }
           setSnapshots((prev) => ({
             ...prev,
             [data.domain]: data,
           }));
           setActiveDomain(data.domain);
           setDomainInput(data.domain);
+
           setStatusBanner({
             tone: 'success',
-            text: `Indexed ${data.employees.length.toLocaleString()} contacts & emails (${data.emailPattern.formulaLabel} · ${data.emailPattern.patternConfidence}% accuracy) for ${data.companyName}.`,
+            text: `Indexed ${data.employees.length.toLocaleString()} contacts & verified emails (${data.emailPattern.patternConfidence}% confidence) for ${data.companyName}.`,
           });
         } else {
           setStatusBanner({
             tone: 'warning',
             text: `No public employee records were indexed for "${
               data.domain || companyDisplayLabel
-            }". Verify the domain spelling or try another company.`,
+            }" — 0 Lens Coins deducted.`,
           });
         }
       } catch (err) {
@@ -674,12 +798,21 @@ export default function App() {
         setLoadingDomain('');
       }
     },
-    [effectiveOffline, queueDomainOffline, snapshots]
+    [
+      applyExactCoinBalance,
+      applySearchCoinMeta,
+      effectiveOffline,
+      publicConfig.defaultSignupCoins,
+      publicConfig.unlimitedMonthlyPriceUsdt,
+      queueDomainOffline,
+      snapshots,
+    ]
   );
 
   const loadFilterCompanyContacts = useCallback(
     async (company: GlobalCompanyItem, preserveCurrentTab = false) => {
       filterCompanyAbortRef.current?.abort();
+      setAppView('workspace');
       setSessionMode('filter');
       if (!preserveCurrentTab) {
         setActiveTab('full-names-emails');
@@ -696,6 +829,13 @@ export default function App() {
       const cleanDom = company.domain
         ? sanitizeClientDomain(company.domain)
         : '';
+      const settledByDom = Boolean(
+        cleanDom && sessionSettledKeysRef.current.has(`dom:${cleanDom}`)
+      );
+      const settledBySlug = Boolean(
+        company.slug && sessionSettledKeysRef.current.has(`slug:${company.slug}`)
+      );
+
       const cachedSnapshot =
         (cleanDom && snapshots[cleanDom]?.employees?.length
           ? snapshots[cleanDom]
@@ -704,7 +844,7 @@ export default function App() {
           (s) => s.companySlug === company.slug && s.employees.length > 0
         );
 
-      if (cachedSnapshot) {
+      if (cachedSnapshot && (settledByDom || settledBySlug)) {
         setFilterCompanyResult(cachedSnapshot);
         setIsFilterCompanyLoading(false);
         return;
@@ -731,11 +871,26 @@ export default function App() {
         const queryParams = new URLSearchParams();
         if (cleanDom) queryParams.set('domain', cleanDom);
         if (company.slug) queryParams.set('companySlug', company.slug);
+        queryParams.set('source', 'filter_company');
 
-        const res = await fetch(`/api/search?${queryParams.toString()}`, {
+        const res = await apiFetch(`/api/search?${queryParams.toString()}`, {
           signal: controller.signal,
         });
         const payload = await res.json();
+
+        if (res.status === 402 || payload?.code === 'INSUFFICIENT_COINS') {
+          if (typeof payload?.balanceRemaining === 'number') {
+            applyExactCoinBalance(payload.balanceRemaining);
+          }
+          setFilterSelectedCompany(null);
+          setExhaustedCoinsPrompt(
+            payload?.error ||
+              `You have consumed all ${publicConfig.defaultSignupCoins} Lens Coins. Upgrade for $${publicConfig.unlimitedMonthlyPriceUsdt}/month in USDT (TRC20) for unlimited company emails.`
+          );
+          setAppView('upgrade');
+          return;
+        }
+
         if (!res.ok) {
           throw new Error(
             payload?.error || 'Failed to load company contacts.'
@@ -744,16 +899,22 @@ export default function App() {
 
         const data = payload as SearchResponse;
         if (!controller.signal.aborted) {
+          applySearchCoinMeta(data.coinMeta);
           setFilterCompanyResult(data);
-          if (data.domain && data.employees.length > 0) {
-            setSnapshots((prev) => ({
-              ...prev,
-              [data.domain]: data,
-            }));
-          }
-          if (data.employees.length === 0) {
+          if (data.employees.length > 0) {
+            if (data.domain) {
+              sessionSettledKeysRef.current.add(`dom:${data.domain}`);
+              setSnapshots((prev) => ({
+                ...prev,
+                [data.domain]: data,
+              }));
+            }
+            if (company.slug) {
+              sessionSettledKeysRef.current.add(`slug:${company.slug}`);
+            }
+          } else {
             setFilterCompanyError(
-              `No public employee records were indexed for ${company.name}.`
+              `No public employee records were indexed for ${company.name} — 0 Lens Coins deducted.`
             );
           }
         }
@@ -771,7 +932,15 @@ export default function App() {
         }
       }
     },
-    [effectiveOffline, queueDomainOffline, snapshots]
+    [
+      applyExactCoinBalance,
+      applySearchCoinMeta,
+      effectiveOffline,
+      publicConfig.defaultSignupCoins,
+      publicConfig.unlimitedMonthlyPriceUsdt,
+      queueDomainOffline,
+      snapshots,
+    ]
   );
 
   const handleSelectGlobalCompany = useCallback(
@@ -783,13 +952,14 @@ export default function App() {
 
   const hydratedDeepLinkRef = useRef<string>('');
   useEffect(() => {
+    if (!user || appView !== 'workspace') return;
     if (
       sessionMode === 'domain' &&
       activeDomain &&
-      !snapshots[activeDomain] &&
+      !sessionSettledKeysRef.current.has(`dom:${activeDomain}`) &&
       !isDomainLoading
     ) {
-      const key = `domain:${activeDomain}`;
+      const key = `${user.id}:domain:${activeDomain}`;
       if (hydratedDeepLinkRef.current !== key) {
         hydratedDeepLinkRef.current = key;
         void executeDomainLookup(activeDomain, false);
@@ -800,7 +970,7 @@ export default function App() {
       !filterCompanyResult &&
       !isFilterCompanyLoading
     ) {
-      const key = `company:${filterSelectedCompany.slug}:${
+      const key = `${user.id}:company:${filterSelectedCompany.slug}:${
         filterSelectedCompany.domain || ''
       }`;
       if (hydratedDeepLinkRef.current !== key) {
@@ -809,9 +979,10 @@ export default function App() {
       }
     }
   }, [
+    user,
+    appView,
     sessionMode,
     activeDomain,
-    snapshots,
     isDomainLoading,
     executeDomainLookup,
     filterSelectedCompany,
@@ -843,8 +1014,22 @@ export default function App() {
     scrollToListTop(resultsTopRef.current);
   }, []);
 
+  const effectiveRoutedView: TopLevelAppView =
+    appView === 'admin'
+      ? 'admin'
+      : !user
+      ? 'landing'
+      : appView === 'upgrade'
+      ? 'upgrade'
+      : appView === 'profile'
+      ? 'profile'
+      : 'workspace';
+
   const currentUrlState = useMemo<UrlRoutedState>(
     () => ({
+      appView: effectiveRoutedView,
+      authMode,
+      adminSection,
       sessionMode,
       activeTab,
       activeDomain,
@@ -859,6 +1044,9 @@ export default function App() {
       showWidgetsDrawer,
     }),
     [
+      effectiveRoutedView,
+      authMode,
+      adminSection,
       sessionMode,
       activeTab,
       activeDomain,
@@ -874,12 +1062,15 @@ export default function App() {
     ]
   );
 
-  const { currentRoutePath, breadcrumbs } = useUrlRouterSync({
+  useUrlRouterSync({
     state: currentUrlState,
     defaultFilters: INITIAL_SIDEBAR_FILTERS,
     domainCompanyName: currentDomainResult?.companyName,
     filterCompanyDisplayName: filterCompanyResult?.companyName,
     onRestorePopState: (parsed) => {
+      setAppView(parsed.appView);
+      setAuthMode(parsed.authMode);
+      setAdminSection(parsed.adminSection);
       setSessionMode(parsed.sessionMode);
       setActiveTab(parsed.activeTab);
       setActiveDomain(parsed.activeDomain);
@@ -906,14 +1097,19 @@ export default function App() {
       }
     },
     onNavigateDomainRoot: () => {
+      setAppView('workspace');
       setSessionMode('domain');
       setActiveTab('full-names-emails');
     },
-    onNavigateTabFullNames: () => setActiveTab('full-names-emails'),
+    onNavigateTabFullNames: () => {
+      setAppView('workspace');
+      setActiveTab('full-names-emails');
+    },
     onBackToCompaniesList: handleBackToCompaniesList,
   });
 
   const handleSelectIndustryFilter = useCallback((nextSlugs: string[]) => {
+    setAppView('workspace');
     setFilters((prev) => ({
       ...prev,
       selectedIndustrySlugs: nextSlugs,
@@ -942,6 +1138,7 @@ export default function App() {
       for (const d of domains.slice(1)) {
         queueDomainOffline(d);
       }
+      setAppView('workspace');
       setSessionMode('domain');
       setActiveTab('full-names-emails');
       void executeDomainLookup(domains[0], false);
@@ -957,6 +1154,7 @@ export default function App() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setAppView('workspace');
     setSessionMode('domain');
     setActiveTab('full-names-emails');
     void executeDomainLookup(domainInput, false);
@@ -1072,6 +1270,7 @@ export default function App() {
 
   const handleSelectPrimaryTab = useCallback(
     (tabId: PrimaryTab) => {
+      setAppView('workspace');
       if (sessionMode === 'filter' && tabId === 'industry') {
         handleBackToCompaniesList();
         return;
@@ -1082,6 +1281,89 @@ export default function App() {
     [sessionMode, handleBackToCompaniesList]
   );
 
+  const handleLogoutAndReturnLanding = useCallback(async () => {
+    await logout();
+    sessionSettledKeysRef.current.clear();
+    setSnapshots({});
+    setActiveDomain(null);
+    setDomainInput('');
+    setFilterSelectedCompany(null);
+    setFilterCompanyResult(null);
+    setAppView('landing');
+    setAuthMode('login');
+  }, [logout]);
+
+  // Initial session validation spinner
+  if (authInitializing) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-[#090d16] text-slate-500">
+        <Loader2 className="h-6 w-6 animate-spin text-sky-500" />
+        <span className="text-xs font-medium">Loading OrgLens Workspace...</span>
+      </div>
+    );
+  }
+
+  // 1. /admin View (Comprehensive Admin Console + Admin Login Gate)
+  if (appView === 'admin') {
+    return (
+      <AdminDashboardPage
+        user={user}
+        publicConfig={publicConfig}
+        activeSection={adminSection}
+        onSelectSection={setAdminSection}
+        theme={theme}
+        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+        onLogin={login}
+        onLogout={() => void handleLogoutAndReturnLanding()}
+        onReturnToWorkspace={() =>
+          setAppView(user ? 'workspace' : 'landing')
+        }
+        onSyncAuthAndConfig={async () => {
+          await Promise.all([refreshAccount(), fetchPublicConfig(true)]);
+        }}
+      />
+    );
+  }
+
+  // 2. Unauthenticated Landing + B2B Login / Sign Up View
+  if (!user) {
+    return (
+      <B2BLandingAuthPage
+        authMode={authMode}
+        onChangeAuthMode={setAuthMode}
+        config={publicConfig}
+        theme={theme}
+        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+        sessionDisplacedNotice={sessionDisplacedNotice}
+        onDismissSessionNotice={clearSessionDisplacedNotice}
+        onLogin={async (identifier, password) => {
+          const loggedIn = await login(identifier, password);
+          setAppView('workspace');
+          if (loggedIn.preferences?.defaultSessionMode === 'filter') {
+            setSessionMode('filter');
+            setActiveTab('industry');
+          } else {
+            setSessionMode('domain');
+            setActiveTab('full-names-emails');
+          }
+          return loggedIn;
+        }}
+        onSignup={async (input) => {
+          const created = await signup(input);
+          setAppView('workspace');
+          setSessionMode('domain');
+          setActiveTab('full-names-emails');
+          setStatusBanner({
+            tone: 'success',
+            text: `Welcome to OrgLens, ${created.fullName}! ${created.lensCoins} free Lens Coins have been credited to your account.`,
+          });
+          return created;
+        }}
+      />
+    );
+  }
+
+  // 3. Authenticated Views: /upgrade (USDT TRC20 Billing) OR Directory Workspace
   return (
     <div className="min-h-screen relative overflow-x-clip bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 transition-colors duration-200">
       <div
@@ -1092,19 +1374,34 @@ export default function App() {
         <div className="absolute top-72 -right-32 h-[360px] w-[520px] rounded-full bg-indigo-500/10 dark:bg-indigo-500/8 blur-3xl" />
       </div>
 
+      {publicConfig.announcementBanner?.trim() && (
+        <div className="relative z-30 bg-sky-600 text-white px-4 py-2 text-xs font-medium text-center flex items-center justify-center gap-2">
+          <Megaphone className="h-3.5 w-3.5 shrink-0" />
+          <span>{publicConfig.announcementBanner}</span>
+        </div>
+      )}
+
       <TopNavHeader
+        user={user}
+        monthlyPriceUsdt={publicConfig.unlimitedMonthlyPriceUsdt}
+        appView={appView}
         sessionMode={sessionMode}
         activeTab={activeTab}
         primaryTabs={primaryTabs}
         showWidgetsDrawer={showWidgetsDrawer}
         totalMatchedCompanies={filterExplorerResult?.totalMatchedCompanies}
         onBrandClick={() => {
+          setAppView('workspace');
           setSessionMode('domain');
           setActiveTab('full-names-emails');
         }}
         onSelectTab={handleSelectPrimaryTab}
-        onToggleWidgetsDrawer={() => setShowWidgetsDrawer((v) => !v)}
+        onToggleWidgetsDrawer={() => {
+          setAppView('workspace');
+          setShowWidgetsDrawer((v) => !v);
+        }}
         onOpenWorldwideExplorer={() => {
+          setAppView('workspace');
           if (!filterSelectedCompany) {
             setActiveTab('industry');
           }
@@ -1112,6 +1409,7 @@ export default function App() {
           scrollToListTop(resultsTopRef.current);
         }}
         onFocusDomainLookup={() => {
+          setAppView('workspace');
           setSessionMode('domain');
           setActiveTab('full-names-emails');
           scrollToListTop(searchInputRef.current, 110);
@@ -1119,345 +1417,405 @@ export default function App() {
             searchInputRef.current?.focus();
           }, 120);
         }}
+        onOpenProfile={() => {
+          setExhaustedCoinsPrompt(null);
+          setAppView('profile');
+          void refreshAccount();
+        }}
+        onOpenUpgrade={() => {
+          setExhaustedCoinsPrompt(null);
+          setAppView('upgrade');
+          void refreshAccount();
+        }}
+        onOpenAdmin={() => setAppView('admin')}
+        onLogout={() => void handleLogoutAndReturnLanding()}
       />
 
-      <div
-        id="top"
-        className="relative z-10 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 flex items-start gap-6"
-      >
-        <FilterSidebar
-          filters={filters}
-          onChangeFilters={handleChangeFilters}
-          onResetFilters={() => {
-            setFilters(INITIAL_SIDEBAR_FILTERS);
-            filterCompanyAbortRef.current?.abort();
-            setIsFilterCompanyLoading(false);
-            setFilterSelectedCompany(null);
-            setFilterCompanyResult(null);
-            setFilterCompanyError(null);
-            setFilterSelectedDepartment('All');
-            setFilterSelectedSeniority('All');
-            setGlobalPage(1);
-            setContactsPage(1);
-            setRolesPage(1);
-            setLocalSearchQuery('');
-            setSessionMode('filter');
-            setActiveTab('industry');
-          }}
-          globalIndustries={globalIndustries}
-          industriesLoading={industriesLoading}
-          onSelectIndustryFilter={handleSelectIndustryFilter}
-          onActivateCompanyDirectory={() => {
-            setSessionMode((prev) => {
-              if (prev !== 'filter') {
-                setActiveTab('industry');
-              }
-              return 'filter';
-            });
-          }}
-          onDomainDirectLookup={(d) => {
-            setSessionMode('domain');
-            setActiveTab('full-names-emails');
-            void executeDomainLookup(d, false);
-          }}
-          onBulkDomainsUpload={handleBulkDomainsUpload}
-          snapshots={snapshots}
-          activeDomain={sessionMode === 'domain' ? activeDomain : null}
-          onSelectSavedSnapshot={(d) => {
-            setSessionMode('domain');
-            setActiveDomain(d);
-            setDomainInput(d);
-            setDomainSelectedDepartment('All');
-            setDomainSelectedSeniority('All');
-            setContactsPage(1);
-            setRolesPage(1);
-            setLocalSearchQuery('');
-            setActiveTab('full-names-emails');
-          }}
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
-          mobileOpen={mobileSidebarOpen}
-          onCloseMobile={() => setMobileSidebarOpen(false)}
-          isFilterLoading={isFilterLoading}
-        />
-
-        <main className="flex-1 min-w-0 space-y-4">
-          <RouteAddressBar
-            breadcrumbs={breadcrumbs}
-            currentRoutePath={currentRoutePath}
+      {appView === 'upgrade' ? (
+        <div className="relative z-10">
+          <UsdtUpgradePage
+            user={user}
+            config={publicConfig}
+            ledger={coinLedger}
+            orders={usdtOrders}
+            exhaustedCoinsPrompt={exhaustedCoinsPrompt}
+            onBackToWorkspace={() => {
+              setExhaustedCoinsPrompt(null);
+              setAppView('workspace');
+            }}
+            onSubmitUsdtPayment={submitUsdtPayment}
+            onRedeemVoucher={redeemVoucher}
           />
-
-          <HeroDomainSearchSection
-            searchInputRef={searchInputRef}
-            domainInput={domainInput}
-            onChangeDomainInput={setDomainInput}
-            onSubmitDomain={handleSubmit}
-            isDomainLoading={isDomainLoading}
-            sessionMode={sessionMode}
-            currentDomainResult={currentDomainResult}
-            onRefreshCurrentDomain={(d) => void executeDomainLookup(d, true)}
-            activeFilterCount={activeFilterCount}
-            onOpenMobileFilters={() => setMobileSidebarOpen(true)}
-            showWidgetsDrawer={showWidgetsDrawer}
-            onToggleWidgetsDrawer={() => setShowWidgetsDrawer((v) => !v)}
-            effectiveOffline={effectiveOffline}
-            pendingSyncCount={pendingSyncCount}
-            onToggleSimulateOffline={() => setSimulateOffline((prev) => !prev)}
+        </div>
+      ) : appView === 'profile' ? (
+        <div className="relative z-10">
+          <UserProfileSettingsPage
+            user={user}
+            config={publicConfig}
+            ledger={coinLedger}
             theme={theme}
             onToggleTheme={() =>
               setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
             }
-            isInstallable={isInstallable}
-            onInstallApp={() => void install()}
-            statusBanner={statusBanner}
-            onDismissStatusBanner={() => setStatusBanner(null)}
-          />
-
-          <SessionAndTabsBar
-            resultsTopRef={resultsTopRef}
-            sessionMode={sessionMode}
-            activeTab={activeTab}
-            primaryTabs={primaryTabs}
-            currentDomainResult={currentDomainResult}
-            filterExplorerResult={filterExplorerResult}
-            activeTotalMatchedContacts={activeTotalMatchedContacts}
-            activeFilterCount={activeFilterCount}
-            isFilterLoading={isFilterLoading}
-            isFilterCompanyLoading={isFilterCompanyLoading}
-            onSelectDomainSession={() => {
-              setSessionMode('domain');
-              setLocalSearchQuery('');
+            onBackToWorkspace={() => setAppView('workspace')}
+            onOpenUpgrade={() => {
+              setExhaustedCoinsPrompt(null);
+              setAppView('upgrade');
+              void refreshAccount();
             }}
-            onSelectFilterSession={() => {
-              if (sessionMode !== 'filter' && !filterSelectedCompany) {
-                setActiveTab('industry');
-              }
-              setSessionMode('filter');
-              setLocalSearchQuery('');
-            }}
-            onSelectTab={handleSelectPrimaryTab}
-          />
-
-          <AnimatePresence mode="wait">
-            {activeTab === 'full-names-emails' && (
-              <motion.section
-                key={`tab-full-names-emails-${sessionMode}-${
-                  filterSelectedCompany?.slug || 'cohort'
-                }`}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.16 }}
-                className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
-              >
-                <EmployeeTableWidget
-                  sessionMode={sessionMode}
-                  domainResult={currentDomainResult}
-                  isDomainLoading={isDomainLoading}
-                  loadingDomain={loadingDomain}
-                  filterResult={filterExplorerResult}
-                  isFilterLoading={isFilterLoading}
-                  filters={filters}
-                  onSwitchToFilterSession={() => {
-                    setSessionMode('filter');
-                    setActiveTab('industry');
-                  }}
-                  onFocusDomainInput={() => searchInputRef.current?.focus()}
-                  onInspectDomainFromFilter={(domain) => {
-                    void executeDomainLookup(domain, false);
-                  }}
-                  filterSelectedCompany={filterSelectedCompany}
-                  filterCompanyResult={filterCompanyResult}
-                  isFilterCompanyLoading={isFilterCompanyLoading}
-                  filterCompanyError={filterCompanyError}
-                  onBackToCompaniesList={handleBackToCompaniesList}
-                  onSelectCompanyFromFilterContact={(compInfo) => {
-                    handleSelectGlobalCompany({
-                      id: compInfo.slug,
-                      slug: compInfo.slug,
-                      name: compInfo.name,
-                      domain: compInfo.domain,
-                      websiteUrl: `https://${compInfo.domain}`,
-                      logoUrl: null,
-                      location: 'Worldwide',
-                      industry: '',
-                      employeeRange: '',
-                      revenueRange: '',
-                    });
-                  }}
-                  globalPage={globalPage}
-                  onChangeGlobalPage={(pg) => {
-                    setGlobalPage(pg);
-                    setContactsPage(1);
-                  }}
-                  contactsPage={contactsPage}
-                  onChangeContactsPage={setContactsPage}
-                  urlLocalQuery={localSearchQuery}
-                  onChangeUrlLocalQuery={setLocalSearchQuery}
-                />
-              </motion.section>
-            )}
-
-            {activeTab === 'command-hierarchy' && (
-              <motion.section
-                key={`tab-command-hierarchy-${sessionMode}-${
-                  filterSelectedCompany?.slug || 'cohort'
-                }`}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.16 }}
-                className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
-              >
-                <JobTitleTab
-                  sessionMode={sessionMode}
-                  domainResult={currentDomainResult}
-                  isDomainLoading={isDomainLoading}
-                  filterResult={filterExplorerResult}
-                  isFilterLoading={isFilterLoading}
-                  filters={filters}
-                  selectedDepartment={activeSelectedDepartment}
-                  selectedSeniority={activeSelectedSeniority}
-                  onSelectDepartment={handleSelectActiveDepartment}
-                  onSelectSeniority={handleSelectActiveSeniority}
-                  onSwitchToFilterSession={() => {
-                    setSessionMode('filter');
-                    setActiveTab('industry');
-                  }}
-                  onFocusDomainInput={() => searchInputRef.current?.focus()}
-                  filterSelectedCompany={filterSelectedCompany}
-                  filterCompanyResult={filterCompanyResult}
-                  isFilterCompanyLoading={isFilterCompanyLoading}
-                  onBackToCompaniesList={handleBackToCompaniesList}
-                  globalPage={globalPage}
-                  onChangeGlobalPage={(pg) => {
-                    setGlobalPage(pg);
-                    setRolesPage(1);
-                  }}
-                  rolesPage={rolesPage}
-                  onChangeRolesPage={setRolesPage}
-                  urlRoleQuery={localSearchQuery}
-                  onChangeUrlRoleQuery={setLocalSearchQuery}
-                />
-              </motion.section>
-            )}
-
-            {activeTab === 'industry' && (
-              <motion.section
-                key={`tab-industry-${sessionMode}`}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.16 }}
-                className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
-              >
-                <IndustryTab
-                  sessionMode={sessionMode}
-                  domainResult={currentDomainResult}
-                  allSnapshots={snapshots}
-                  isDomainLoading={isDomainLoading}
-                  filterResult={filterExplorerResult}
-                  isFilterLoading={isFilterLoading}
-                  filters={filters}
-                  globalIndustries={globalIndustries}
-                  globalDirectory={globalDirectory}
-                  globalDirectoryLoading={globalDirectoryLoading}
-                  globalPage={globalPage}
-                  onChangeGlobalPage={setGlobalPage}
-                  onSelectIndustrySlug={(slug) => {
-                    setFilters((prev) => ({
-                      ...prev,
-                      selectedIndustrySlugs: slug ? [slug] : [],
-                    }));
-                    setSessionMode('filter');
-                    setGlobalPage(1);
-                    setContactsPage(1);
-                    setRolesPage(1);
-                  }}
-                  onSelectGlobalCompany={handleSelectGlobalCompany}
-                  onSelectDomain={(d) => {
-                    setSessionMode('domain');
-                    setActiveDomain(d);
-                    setDomainInput(d);
-                    setContactsPage(1);
-                    setRolesPage(1);
-                    setLocalSearchQuery('');
-                    setActiveTab('full-names-emails');
-                  }}
-                  onSwitchSessionMode={(mode) => {
-                    if (mode === 'filter') {
-                      setActiveTab('industry');
-                    }
-                    setSessionMode(mode);
-                  }}
-                  onFocusDomainInput={() => searchInputRef.current?.focus()}
-                />
-              </motion.section>
-            )}
-          </AnimatePresence>
-
-          <WidgetsDrawerBoard
-            showWidgetsDrawer={showWidgetsDrawer}
-            widgets={widgets}
-            onResetWidgets={() => setWidgets(DEFAULT_WIDGETS)}
-            onToggleWidgetVisibility={toggleWidgetVisibility}
-            onReorderVisible={handleReorderVisible}
-            onMoveWidgetByStep={moveWidgetByStep}
-            snapshots={snapshots}
-            activeDomain={activeDomain}
-            effectiveOffline={effectiveOffline}
-            onSelectSavedSnapshot={(d) => {
+            onOpenUnlockedDomain={(dom) => {
+              setAppView('workspace');
               setSessionMode('domain');
-              setActiveDomain(d);
-              setDomainInput(d);
-              setDomainSelectedDepartment('All');
-              setDomainSelectedSeniority('All');
+              setActiveTab('full-names-emails');
+              void executeDomainLookup(dom, false);
+            }}
+            onUpdateProfile={updateProfile}
+            onChangePassword={changePassword}
+            onRotateSession={rotateSession}
+            onRedeemVoucher={redeemVoucher}
+            onLogout={() => void handleLogoutAndReturnLanding()}
+          />
+        </div>
+      ) : (
+        <div
+          id="top"
+          className="relative z-10 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 flex items-start gap-6"
+        >
+          <FilterSidebar
+            filters={filters}
+            onChangeFilters={handleChangeFilters}
+            onResetFilters={() => {
+              setFilters(INITIAL_SIDEBAR_FILTERS);
+              filterCompanyAbortRef.current?.abort();
+              setIsFilterCompanyLoading(false);
+              setFilterSelectedCompany(null);
+              setFilterCompanyResult(null);
+              setFilterCompanyError(null);
+              setFilterSelectedDepartment('All');
+              setFilterSelectedSeniority('All');
+              setGlobalPage(1);
               setContactsPage(1);
               setRolesPage(1);
               setLocalSearchQuery('');
-              setActiveTab('full-names-emails');
+              setSessionMode('filter');
+              setActiveTab('industry');
             }}
-            onRefreshSnapshot={(d) => void executeDomainLookup(d, true)}
-            onDeleteSnapshot={(d) => {
-              setSnapshots((prev) => {
-                const next = { ...prev };
-                delete next[d];
-                return next;
+            globalIndustries={globalIndustries}
+            industriesLoading={industriesLoading}
+            onSelectIndustryFilter={handleSelectIndustryFilter}
+            onActivateCompanyDirectory={() => {
+              setSessionMode((prev) => {
+                if (prev !== 'filter') {
+                  setActiveTab('industry');
+                }
+                return 'filter';
               });
-              if (activeDomain === d) {
-                setActiveDomain(null);
-                setDomainInput('');
-              }
             }}
-            syncQueue={syncQueue}
-            simulateOffline={simulateOffline}
-            isSyncing={isSyncing}
-            lastSyncedAt={lastSyncedAt}
-            onToggleSimulateOffline={() => setSimulateOffline((v) => !v)}
-            onTriggerSyncNow={() => void syncPendingQueue()}
-            onRemoveQueueItem={(id) =>
-              setSyncQueue((prev) => prev.filter((i) => i.id !== id))
-            }
-            onClearSynced={() =>
-              setSyncQueue((prev) => prev.filter((i) => i.status !== 'synced'))
-            }
-            activeAnalyticsResult={activeAnalyticsResult}
-            activeSelectedDepartment={activeSelectedDepartment}
-            activeSelectedSeniority={activeSelectedSeniority}
-            onSelectActiveDepartment={handleSelectActiveDepartment}
-            onSelectActiveSeniority={handleSelectActiveSeniority}
-            onSelectDomainFromAnalytics={(d) => {
+            onDomainDirectLookup={(d) => {
               setSessionMode('domain');
-              setActiveDomain(d);
-              setDomainInput(d);
+              setActiveTab('full-names-emails');
+              void executeDomainLookup(d, false);
             }}
+            onBulkDomainsUpload={handleBulkDomainsUpload}
+            snapshots={snapshots}
+            activeDomain={sessionMode === 'domain' ? activeDomain : null}
+            onSelectSavedSnapshot={(d) => {
+              setSessionMode('domain');
+              void executeDomainLookup(d, false);
+            }}
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+            mobileOpen={mobileSidebarOpen}
+            onCloseMobile={() => setMobileSidebarOpen(false)}
+            isFilterLoading={isFilterLoading}
           />
-        </main>
-      </div>
+
+          <main className="flex-1 min-w-0 space-y-4">
+            <HeroDomainSearchSection
+              searchInputRef={searchInputRef}
+              domainInput={domainInput}
+              onChangeDomainInput={setDomainInput}
+              onSubmitDomain={handleSubmit}
+              isDomainLoading={isDomainLoading}
+              sessionMode={sessionMode}
+              currentDomainResult={currentDomainResult}
+              onRefreshCurrentDomain={(d) => void executeDomainLookup(d, true)}
+              activeFilterCount={activeFilterCount}
+              onOpenMobileFilters={() => setMobileSidebarOpen(true)}
+              showWidgetsDrawer={showWidgetsDrawer}
+              onToggleWidgetsDrawer={() => setShowWidgetsDrawer((v) => !v)}
+              effectiveOffline={effectiveOffline}
+              pendingSyncCount={pendingSyncCount}
+              onToggleSimulateOffline={() =>
+                setSimulateOffline((prev) => !prev)
+              }
+              theme={theme}
+              onToggleTheme={() =>
+                setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
+              }
+              isInstallable={isInstallable}
+              onInstallApp={() => void install()}
+              statusBanner={statusBanner}
+              onDismissStatusBanner={() => setStatusBanner(null)}
+            />
+
+            <SessionAndTabsBar
+              resultsTopRef={resultsTopRef}
+              sessionMode={sessionMode}
+              activeTab={activeTab}
+              primaryTabs={primaryTabs}
+              currentDomainResult={currentDomainResult}
+              filterExplorerResult={filterExplorerResult}
+              activeTotalMatchedContacts={activeTotalMatchedContacts}
+              activeFilterCount={activeFilterCount}
+              isFilterLoading={isFilterLoading}
+              isFilterCompanyLoading={isFilterCompanyLoading}
+              onSelectDomainSession={() => {
+                setSessionMode('domain');
+                setLocalSearchQuery('');
+              }}
+              onSelectFilterSession={() => {
+                if (sessionMode !== 'filter' && !filterSelectedCompany) {
+                  setActiveTab('industry');
+                }
+                setSessionMode('filter');
+                setLocalSearchQuery('');
+              }}
+              onSelectTab={handleSelectPrimaryTab}
+            />
+
+            <AnimatePresence mode="wait">
+              {activeTab === 'full-names-emails' && (
+                <motion.section
+                  key={`tab-full-names-emails-${sessionMode}-${
+                    filterSelectedCompany?.slug || 'cohort'
+                  }`}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.16 }}
+                  className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
+                >
+                  <EmployeeTableWidget
+                    sessionMode={sessionMode}
+                    domainResult={currentDomainResult}
+                    isDomainLoading={isDomainLoading}
+                    loadingDomain={loadingDomain}
+                    filterResult={filterExplorerResult}
+                    isFilterLoading={isFilterLoading}
+                    filters={filters}
+                    onSwitchToFilterSession={() => {
+                      setSessionMode('filter');
+                      setActiveTab('industry');
+                    }}
+                    onFocusDomainInput={() => searchInputRef.current?.focus()}
+                    onInspectDomainFromFilter={(domain) => {
+                      void executeDomainLookup(domain, false);
+                    }}
+                    filterSelectedCompany={filterSelectedCompany}
+                    filterCompanyResult={filterCompanyResult}
+                    isFilterCompanyLoading={isFilterCompanyLoading}
+                    filterCompanyError={filterCompanyError}
+                    onBackToCompaniesList={handleBackToCompaniesList}
+                    onSelectCompanyFromFilterContact={(compInfo) => {
+                      handleSelectGlobalCompany({
+                        id: compInfo.slug,
+                        slug: compInfo.slug,
+                        name: compInfo.name,
+                        domain: compInfo.domain,
+                        websiteUrl: `https://${compInfo.domain}`,
+                        logoUrl: null,
+                        location: 'Worldwide',
+                        industry: '',
+                        employeeRange: '',
+                        revenueRange: '',
+                      });
+                    }}
+                    globalPage={globalPage}
+                    onChangeGlobalPage={(pg) => {
+                      setGlobalPage(pg);
+                      setContactsPage(1);
+                    }}
+                    contactsPage={contactsPage}
+                    onChangeContactsPage={setContactsPage}
+                    urlLocalQuery={localSearchQuery}
+                    onChangeUrlLocalQuery={setLocalSearchQuery}
+                    monthlyPriceUsdt={publicConfig.unlimitedMonthlyPriceUsdt}
+                    onOpenUpgrade={() => setAppView('upgrade')}
+                    copyFormat={user.preferences?.copyFormat}
+                    autoScrollOnPagination={
+                      user.preferences?.autoScrollOnPagination ?? true
+                    }
+                    exportFilenamePrefix={
+                      user.preferences?.exportFilenamePrefix
+                    }
+                  />
+                </motion.section>
+              )}
+
+              {activeTab === 'command-hierarchy' && (
+                <motion.section
+                  key={`tab-command-hierarchy-${sessionMode}-${
+                    filterSelectedCompany?.slug || 'cohort'
+                  }`}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.16 }}
+                  className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
+                >
+                  <JobTitleTab
+                    sessionMode={sessionMode}
+                    domainResult={currentDomainResult}
+                    isDomainLoading={isDomainLoading}
+                    filterResult={filterExplorerResult}
+                    isFilterLoading={isFilterLoading}
+                    filters={filters}
+                    selectedDepartment={activeSelectedDepartment}
+                    selectedSeniority={activeSelectedSeniority}
+                    onSelectDepartment={handleSelectActiveDepartment}
+                    onSelectSeniority={handleSelectActiveSeniority}
+                    onSwitchToFilterSession={() => {
+                      setSessionMode('filter');
+                      setActiveTab('industry');
+                    }}
+                    onFocusDomainInput={() => searchInputRef.current?.focus()}
+                    filterSelectedCompany={filterSelectedCompany}
+                    filterCompanyResult={filterCompanyResult}
+                    isFilterCompanyLoading={isFilterCompanyLoading}
+                    onBackToCompaniesList={handleBackToCompaniesList}
+                    globalPage={globalPage}
+                    onChangeGlobalPage={(pg) => {
+                      setGlobalPage(pg);
+                      setRolesPage(1);
+                    }}
+                    rolesPage={rolesPage}
+                    onChangeRolesPage={setRolesPage}
+                    urlRoleQuery={localSearchQuery}
+                    onChangeUrlRoleQuery={setLocalSearchQuery}
+                  />
+                </motion.section>
+              )}
+
+              {activeTab === 'industry' && (
+                <motion.section
+                  key={`tab-industry-${sessionMode}`}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.16 }}
+                  className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
+                >
+                  <IndustryTab
+                    sessionMode={sessionMode}
+                    domainResult={currentDomainResult}
+                    allSnapshots={snapshots}
+                    isDomainLoading={isDomainLoading}
+                    filterResult={filterExplorerResult}
+                    isFilterLoading={isFilterLoading}
+                    filters={filters}
+                    globalIndustries={globalIndustries}
+                    globalDirectory={globalDirectory}
+                    globalDirectoryLoading={globalDirectoryLoading}
+                    globalPage={globalPage}
+                    onChangeGlobalPage={setGlobalPage}
+                    onSelectIndustrySlug={(slug) => {
+                      setFilters((prev) => ({
+                        ...prev,
+                        selectedIndustrySlugs: slug ? [slug] : [],
+                      }));
+                      setSessionMode('filter');
+                      setGlobalPage(1);
+                      setContactsPage(1);
+                      setRolesPage(1);
+                    }}
+                    onSelectGlobalCompany={handleSelectGlobalCompany}
+                    onSelectDomain={(d) => {
+                      setSessionMode('domain');
+                      setActiveTab('full-names-emails');
+                      void executeDomainLookup(d, false);
+                    }}
+                    onSwitchSessionMode={(mode) => {
+                      if (mode === 'filter') {
+                        setActiveTab('industry');
+                      }
+                      setSessionMode(mode);
+                    }}
+                    onFocusDomainInput={() => searchInputRef.current?.focus()}
+                  />
+                </motion.section>
+              )}
+            </AnimatePresence>
+
+            <WidgetsDrawerBoard
+              showWidgetsDrawer={showWidgetsDrawer}
+              widgets={widgets}
+              onResetWidgets={() => setWidgets(DEFAULT_WIDGETS)}
+              onToggleWidgetVisibility={toggleWidgetVisibility}
+              onReorderVisible={handleReorderVisible}
+              onMoveWidgetByStep={moveWidgetByStep}
+              snapshots={snapshots}
+              activeDomain={activeDomain}
+              effectiveOffline={effectiveOffline}
+              onSelectSavedSnapshot={(d) => {
+                setSessionMode('domain');
+                setActiveTab('full-names-emails');
+                void executeDomainLookup(d, false);
+              }}
+              onRefreshSnapshot={(d) => void executeDomainLookup(d, true)}
+              onDeleteSnapshot={(d) => {
+                setSnapshots((prev) => {
+                  const next = { ...prev };
+                  delete next[d];
+                  return next;
+                });
+                if (activeDomain === d) {
+                  setActiveDomain(null);
+                  setDomainInput('');
+                }
+              }}
+              syncQueue={syncQueue}
+              simulateOffline={simulateOffline}
+              isSyncing={isSyncing}
+              lastSyncedAt={lastSyncedAt}
+              onToggleSimulateOffline={() => setSimulateOffline((v) => !v)}
+              onTriggerSyncNow={() => void syncPendingQueue()}
+              onRemoveQueueItem={(id) =>
+                setSyncQueue((prev) => prev.filter((i) => i.id !== id))
+              }
+              onClearSynced={() =>
+                setSyncQueue((prev) =>
+                  prev.filter((i) => i.status !== 'synced')
+                )
+              }
+              activeAnalyticsResult={activeAnalyticsResult}
+              activeSelectedDepartment={activeSelectedDepartment}
+              activeSelectedSeniority={activeSelectedSeniority}
+              onSelectActiveDepartment={handleSelectActiveDepartment}
+              onSelectActiveSeniority={handleSelectActiveSeniority}
+              onSelectDomainFromAnalytics={(d) => {
+                setSessionMode('domain');
+                void executeDomainLookup(d, false);
+              }}
+            />
+          </main>
+        </div>
+      )}
 
       <footer className="relative z-10 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8 border-t border-slate-200/70 dark:border-slate-800/70 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400 text-center sm:text-left">
-        <span>OrgLens Public Directory &amp; Email Format Explorer</span>
-        <span>Corporate email finder &amp; Worldwide company explorer</span>
+        <span>OrgLens Corporate Directory &amp; Company Explorer</span>
+        <div className="flex items-center gap-4">
+          <a
+            href={publicConfig.supportTelegramUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-slate-900 dark:hover:text-white transition-colors"
+          >
+            Support
+          </a>
+          <span aria-hidden="true">·</span>
+          <span>{publicConfig.companyTagline}</span>
+        </div>
       </footer>
     </div>
   );

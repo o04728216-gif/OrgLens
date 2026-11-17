@@ -444,7 +444,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
       {isPaginationLoading && (
         <PaginationLoadingBanner
           message={`Loading page ${targetPaginationPage.toLocaleString()} of ${coherentTotalPages.toLocaleString()}...`}
-          rightMeta="Fetching next 500 companies & live email formats"
+          rightMeta="Fetching next 500 companies"
         />
       )}
 
@@ -651,11 +651,6 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                               <span>{companyDomain}</span>
                               <ExternalLink className="h-3 w-3 opacity-75 shrink-0" />
                             </a>
-                            {comp.detectedFormulaLabel && (
-                              <div className="text-[10px] text-slate-400 dark:text-slate-500">
-                                Format: {comp.detectedFormulaLabel.split('(')[0].trim()}
-                              </div>
-                            )}
                           </div>
                         </div>
                       </td>

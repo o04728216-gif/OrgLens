@@ -24,10 +24,7 @@ import type {
   SessionMode,
   SidebarFiltersState,
 } from '../types';
-import {
-  applyExcelEmailFormula,
-  getExcelFormulaDefinition,
-} from '../utils/emailFormulas';
+import { applyExcelEmailFormula } from '../utils/emailFormulas';
 import { copyTextToClipboard, exportEmployeesToCsv } from '../utils/offlineStorage';
 import { scrollToListTop } from '../utils/scrollUtils';
 import { CompanyDrilldownHeader } from './directory/CompanyDrilldownHeader';
@@ -63,13 +60,17 @@ interface EmployeeTableWidgetProps {
   onChangeContactsPage?: (page: number) => void;
   urlLocalQuery?: string;
   onChangeUrlLocalQuery?: (q: string) => void;
+  monthlyPriceUsdt?: number;
+  onOpenUpgrade?: () => void;
+  copyFormat?: 'email_only' | 'name_and_email';
+  autoScrollOnPagination?: boolean;
+  exportFilenamePrefix?: string;
 }
 
 interface ComputedRow extends EmployeeRecord {
   resolvedEmail: string;
   resolvedAccuracy: number;
   displayRank: number;
-  activeFormulaLabel: string;
 }
 
 const CONTACTS_PER_PAGE = 500;
@@ -127,6 +128,11 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   onChangeContactsPage,
   urlLocalQuery,
   onChangeUrlLocalQuery,
+  monthlyPriceUsdt = 15,
+  onOpenUpgrade,
+  copyFormat = 'email_only',
+  autoScrollOnPagination = true,
+  exportFilenamePrefix = 'orglens',
 }) => {
   const [internalQuery, setInternalQuery] = useState('');
   const [internalPage, setInternalPage] = useState(1);
@@ -188,13 +194,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       ? filterCompanyResult
       : null;
 
-  const domainFormulaDef = useMemo(() => {
-    if (!activeSingleCompanyResult) return null;
-    return getExcelFormulaDefinition(
-      activeSingleCompanyResult.emailPattern.detectedFormulaId
-    );
-  }, [activeSingleCompanyResult]);
-
   const filteredEmployees = useMemo<ComputedRow[]>(() => {
     const qLocal = localQuery.trim().toLowerCase();
 
@@ -206,8 +205,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         isViewingFilterCompany && filters.emailFormulaOverride !== 'auto'
           ? filters.emailFormulaOverride
           : detectedId;
-      const overrideDef =
-        formulaId !== detectedId ? getExcelFormulaDefinition(formulaId) : null;
 
       const rows = activeSingleCompanyResult.employees
         .map((emp) => {
@@ -220,18 +217,12 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                 activeSingleCompanyResult.domain,
                 formulaId
               );
-          const activeFormulaLabel = emp.emailVerifiedOnWeb
-            ? 'Public Web Verified'
-            : overrideDef?.label ||
-              emp.emailFormulaLabel ||
-              activeSingleCompanyResult.emailPattern.formulaLabel;
 
           return {
             ...emp,
             resolvedEmail,
             resolvedAccuracy: emp.emailAccuracy,
             displayRank: emp.rank,
-            activeFormulaLabel,
           };
         })
         .filter((emp) => {
@@ -252,15 +243,12 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     if (!filterResult) return [];
     const qContact = filters.contactSearch.trim().toLowerCase();
     const qRole = filters.roleKeyword.trim().toLowerCase();
-    const overrideDef =
-      filters.emailFormulaOverride !== 'auto'
-        ? getExcelFormulaDefinition(filters.emailFormulaOverride)
-        : null;
 
     const rows = filterResult.employees
       .map((emp) => {
+        const isServerMasked = emp.email.includes('*');
         const resolvedEmail =
-          filters.emailFormulaOverride === 'auto'
+          isServerMasked || filters.emailFormulaOverride === 'auto'
             ? emp.email
             : applyExcelEmailFormula(
                 emp.fullName,
@@ -274,19 +262,11 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
             ? emp.emailAccuracy
             : Math.max(62, emp.emailAccuracy);
 
-        const activeFormulaLabel =
-          filters.emailFormulaOverride === 'auto'
-            ? emp.emailVerifiedOnWeb
-              ? 'Public Web Verified'
-              : emp.emailFormulaLabel || ''
-            : overrideDef?.label || '';
-
         return {
           ...emp,
           resolvedEmail,
           resolvedAccuracy,
           displayRank: emp.rank,
-          activeFormulaLabel,
         };
       })
       .filter((emp) => {
@@ -412,7 +392,9 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   const handleSelectCompanyBatch = (nextBatch: number) => {
     if (!onChangeGlobalPage) return;
     const bounded = Math.max(1, Math.min(totalCompanyBatches, nextBatch));
-    scrollToListTop(listTopRef.current);
+    if (autoScrollOnPagination) {
+      scrollToListTop(listTopRef.current);
+    }
     if (bounded === globalPage && !isServerBatchLoading) return;
     setRequestedServerPage(bounded);
     updateCurrentPage(1);
@@ -421,7 +403,9 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
 
   const handleSelectContactsPage = (nextPage: number) => {
     const bounded = Math.max(1, Math.min(totalPages, nextPage));
-    scrollToListTop(listTopRef.current);
+    if (autoScrollOnPagination) {
+      scrollToListTop(listTopRef.current);
+    }
 
     if (useServerBatchPagination && onChangeGlobalPage) {
       handleSelectCompanyBatch(bounded);
@@ -473,10 +457,13 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     }
   };
 
+  const formatCopiedRecipient = (fullName: string, email: string) =>
+    copyFormat === 'name_and_email' ? `"${fullName}" <${email}>` : email;
+
   const handleCopyEmailList = async () => {
     const emailsOnly = filteredEmployees
-      .map((emp) => emp.resolvedEmail)
-      .filter(Boolean)
+      .filter((emp) => Boolean(emp.resolvedEmail))
+      .map((emp) => formatCopiedRecipient(emp.fullName, emp.resolvedEmail))
       .join('\n');
     if (!emailsOnly) return;
     const ok = await copyTextToClipboard(emailsOnly);
@@ -489,9 +476,13 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     }
   };
 
-  const handleCopySingleEmail = async (id: string, email: string) => {
+  const handleCopySingleEmail = async (
+    id: string,
+    fullName: string,
+    email: string
+  ) => {
     if (!email) return;
-    const ok = await copyTextToClipboard(email);
+    const ok = await copyTextToClipboard(formatCopiedRecipient(fullName, email));
     if (ok) {
       setCopiedRowId(id);
       window.setTimeout(() => setCopiedRowId(null), 1800);
@@ -520,8 +511,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           <span>
             {sessionMode === 'domain' || isViewingFilterCompany ? (
               <>
-                Detecting live highest-% email format on the web, MX servers,
-                and full roster for{' '}
+                Indexing verified corporate emails, MX servers, and full roster
+                for{' '}
                 <strong className="font-mono text-slate-800 dark:text-slate-200">
                   {isViewingFilterCompany
                     ? filterSelectedCompany?.name || 'company'
@@ -531,8 +522,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               </>
             ) : (
               <>
-                Auto-loading live contacts, per-company email formats, and job
-                titles matching your active filters...
+                Auto-loading verified contacts, emails, and job titles matching
+                your active filters...
               </>
             )}
           </span>
@@ -587,9 +578,9 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           Enter any company domain above to extract Full Names, Emails &amp; Job Titles
         </h4>
         <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
-          Domain Lookup searches the live web for each organization&apos;s
-          highest-percentage email format, harvests publicly verified addresses,
-          and ranks every contact from executive leadership to entry-level roles.
+          Domain Lookup indexes publicly verified corporate addresses, validates
+          domain mail servers, and ranks every contact from executive leadership
+          to entry-level roles.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
           <button
@@ -657,18 +648,37 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       )}
 
       {/* Top Session Metadata Line */}
+      {sessionMode === 'filter' &&
+        !isViewingFilterCompany &&
+        filterResult?.emailsMaskedForZeroCoins && (
+          <div className="rounded-xl px-4 py-3 bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-800/70 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+            <span className="text-amber-900 dark:text-amber-200 font-medium">
+              You have 0 Lens Coins remaining. Upgrade for ${monthlyPriceUsdt}
+              /month in USDT (TRC20) to reveal unlimited worldwide company
+              emails.
+            </span>
+            {onOpenUpgrade && (
+              <button
+                type="button"
+                onClick={onOpenUpgrade}
+                className="px-3.5 py-1.5 rounded-lg font-semibold bg-sky-600 hover:bg-sky-500 text-white whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Upgrade Unlimited (${monthlyPriceUsdt}/mo USDT)
+              </button>
+            )}
+          </div>
+        )}
+
       {(sessionMode === 'domain' || isViewingFilterCompany) &&
       activeSingleCompanyResult ? (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 dark:text-slate-300 px-1">
           <span className="font-semibold text-slate-900 dark:text-white">
-            Detected Format:{' '}
-            {domainFormulaDef?.label ||
-              activeSingleCompanyResult.emailPattern.formulaLabel}
+            {activeSingleCompanyResult.companyName}
           </span>
           <span aria-hidden="true">·</span>
           <span className="font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">
-            {activeSingleCompanyResult.emailPattern.patternConfidence}% Pattern
-            Accuracy
+            {activeSingleCompanyResult.emailPattern.patternConfidence}%
+            Verification Confidence
           </span>
           {webVerifiedCount > 0 && (
             <>
@@ -684,14 +694,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               ? `MX Verified (${activeSingleCompanyResult.emailPattern.mxProvider})`
               : 'Standard Domain Routing'}
           </span>
-          {activeSingleCompanyResult.emailPattern.detectionBasis && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span className="text-slate-500 dark:text-slate-400">
-                {activeSingleCompanyResult.emailPattern.detectionBasis}
-              </span>
-            </>
-          )}
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-300 px-1">
@@ -868,7 +870,17 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           {filteredEmployees.length > 0 && (
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                const baseSlug =
+                  (sessionMode === 'domain' || isViewingFilterCompany) &&
+                  activeSingleCompanyResult
+                    ? activeSingleCompanyResult.domain
+                    : 'filtered-contacts';
+                const cleanCustomPrefix = exportFilenamePrefix?.trim();
+                const fullPrefix =
+                  cleanCustomPrefix && cleanCustomPrefix !== 'orglens'
+                    ? `${cleanCustomPrefix}-${baseSlug}`
+                    : baseSlug;
                 exportEmployeesToCsv(
                   filteredEmployees.map((emp) => ({
                     ...emp,
@@ -876,16 +888,13 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                     email: emp.resolvedEmail,
                     emailAccuracy: emp.resolvedAccuracy,
                   })),
-                  (sessionMode === 'domain' || isViewingFilterCompany) &&
-                    activeSingleCompanyResult
-                    ? activeSingleCompanyResult.domain
-                    : 'filtered-contacts',
+                  fullPrefix,
                   sessionMode === 'domain'
                     ? 'auto'
                     : filters.emailFormulaOverride,
                   activeSingleCompanyResult?.emailPattern.detectedFormulaId
-                )
-              }
+                );
+              }}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-100 dark:hover:bg-white dark:text-slate-950 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
             >
               <Download className="h-3.5 w-3.5" />
@@ -902,12 +911,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           <strong className="text-slate-700 dark:text-slate-200">
             Most Important → Least Important
           </strong>
-          {sessionMode === 'filter' && !isViewingFilterCompany && (
-            <span className="hidden sm:inline">
-              {' '}
-              · Auto-detected unique email format per company
-            </span>
-          )}
         </span>
         <span className="font-mono tabular-nums whitespace-nowrap">
           {filteredEmployees.length === 0
@@ -1048,21 +1051,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                                   <span>{emp.domain}</span>
                                   <ExternalLink className="h-2.5 w-2.5 shrink-0" />
                                 </a>
-                              </>
-                            )}
-                            {emp.activeFormulaLabel && (
-                              <>
-                                <span
-                                  aria-hidden="true"
-                                  className="hidden lg:inline"
-                                >
-                                  ·
-                                </span>
-                                <span className="hidden lg:inline font-mono text-[10px] text-slate-400 dark:text-slate-500">
-                                  {emp.activeFormulaLabel.split('(')[0].trim()}
-                                </span>
-                              </>
-                            )}
+                                </>
+                              )}
                           </div>
                         )}
                       </td>
@@ -1074,10 +1064,15 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                             onClick={() =>
                               void handleCopySingleEmail(
                                 emp.id,
+                                emp.fullName,
                                 emp.resolvedEmail
                               )
                             }
-                            title="Click to copy email address"
+                            title={
+                              copyFormat === 'name_and_email'
+                                ? 'Click to copy "Full Name" <email>'
+                                : 'Click to copy email address'
+                            }
                             className="group inline-flex items-center gap-2 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer text-left"
                           >
                             <span>{emp.resolvedEmail}</span>

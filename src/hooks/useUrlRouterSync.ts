@@ -52,11 +52,13 @@ export function useUrlRouterSync({
   // Push discrete navigations to browser history and replace continuous search/filter edits
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const discreteKey = `${state.sessionMode}|${state.activeTab}|${
-      state.activeDomain || ''
-    }|${state.filterSelectedCompany?.slug || ''}|${state.globalPage}|${
-      state.contactsPage
-    }|${state.rolesPage}|${state.showWidgetsDrawer ? '1' : '0'}`;
+    const discreteKey = `${state.appView}|${state.authMode}|${
+      state.adminSection
+    }|${state.sessionMode}|${state.activeTab}|${state.activeDomain || ''}|${
+      state.filterSelectedCompany?.slug || ''
+    }|${state.globalPage}|${state.contactsPage}|${state.rolesPage}|${
+      state.showWidgetsDrawer ? '1' : '0'
+    }`;
 
     const currentBrowserPath = `${window.location.pathname}${window.location.search}`;
 
@@ -88,6 +90,9 @@ export function useUrlRouterSync({
     }
   }, [
     currentRoutePath,
+    state.appView,
+    state.authMode,
+    state.adminSection,
     state.sessionMode,
     state.activeTab,
     state.activeDomain,

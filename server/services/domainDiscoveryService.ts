@@ -39,6 +39,7 @@ import {
   queryYahooSafe,
 } from './webSearchClient.ts';
 import { inspectTargetWebsite } from './websiteScraper.ts';
+import { applyManualOverrideToSearchResponse } from './manualOverrideApplier.ts';
 
 export async function discoverDomainEmployees(
   rawDomain: string,
@@ -59,11 +60,11 @@ export async function discoverDomainEmployees(
   if (domain && !forceRefresh) {
     const cachedEntry = domainCache.get(domain);
     if (cachedEntry && cachedEntry.expiresAt > startedAt) {
-      return {
+      return applyManualOverrideToSearchResponse({
         ...cachedEntry.data,
         cached: true,
         durationMs: Date.now() - startedAt,
-      };
+      });
     }
   }
 
@@ -380,5 +381,5 @@ export async function discoverDomainEmployees(
     });
   }
 
-  return result;
+  return applyManualOverrideToSearchResponse(result);
 }

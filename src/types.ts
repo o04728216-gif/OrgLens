@@ -1,4 +1,5 @@
-import type { EmailFormulaId } from './utils/emailFormulas';
+import type { EmailFormulaId } from './utils/emailFormulas.ts';
+import type { SearchCoinMeta } from './types/platformTypes.ts';
 
 export type DepartmentCategory =
   | 'Leadership'
@@ -82,6 +83,7 @@ export interface SearchResponse {
   employees: EmployeeRecord[];
   departmentBreakdown: DepartmentStat[];
   seniorityBreakdown: SeniorityStat[];
+  coinMeta?: SearchCoinMeta;
 }
 
 export interface GlobalIndustryOption {
@@ -131,6 +133,7 @@ export interface FilterExplorerResponse {
   departmentBreakdown: DepartmentStat[];
   seniorityBreakdown: SeniorityStat[];
   fetchedAt: string;
+  emailsMaskedForZeroCoins?: boolean;
 }
 
 export interface SidebarFiltersState {
@@ -175,3 +178,6 @@ export interface WidgetConfig {
   subtitle: string;
   visible: boolean;
 }
+
+export type * from './types/platformTypes.ts';
+

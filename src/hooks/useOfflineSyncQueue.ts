@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { SearchResponse, SessionMode, SyncQueueItem } from '../types';
 import type { StatusBannerState } from '../components/layout/HeroDomainSearchSection';
+import { apiFetch, loadAuthToken } from '../utils/authClient';
 import { loadSyncQueue, saveSyncQueue } from '../utils/offlineStorage';
 
 interface UseOfflineSyncQueueParams {
   onSyncedResults: (results: SearchResponse[]) => void;
+  onBalanceUpdated?: (balance: number) => void;
   setActiveDomain: (domain: string) => void;
   setSessionMode: (mode: SessionMode) => void;
   setStatusBanner: (banner: StatusBannerState | null) => void;
@@ -12,6 +14,7 @@ interface UseOfflineSyncQueueParams {
 
 export function useOfflineSyncQueue({
   onSyncedResults,
+  onBalanceUpdated,
   setActiveDomain,
   setSessionMode,
   setStatusBanner,
@@ -64,7 +67,7 @@ export function useOfflineSyncQueue({
   }, []);
 
   const syncPendingQueue = useCallback(async () => {
-    if (effectiveOffline || isSyncing) return;
+    if (effectiveOffline || isSyncing || !loadAuthToken()) return;
     const pendingItems = syncQueue.filter(
       (item) => item.status === 'pending' || item.status === 'failed'
     );
@@ -84,7 +87,7 @@ export function useOfflineSyncQueue({
     );
 
     try {
-      const res = await fetch('/api/sync', {
+      const res = await apiFetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domains: domainsToSync }),
@@ -98,7 +101,15 @@ export function useOfflineSyncQueue({
         syncedAt: string;
         results: SearchResponse[];
         errors: Record<string, string>;
+        balanceRemaining?: number;
       } = await res.json();
+
+      if (
+        typeof payload.balanceRemaining === 'number' &&
+        onBalanceUpdated
+      ) {
+        onBalanceUpdated(payload.balanceRemaining);
+      }
 
       const nonEmptyResults = payload.results.filter(
         (r) => r.employees.length > 0
@@ -132,7 +143,7 @@ export function useOfflineSyncQueue({
         tone: 'success',
         text: `Synced ${payload.results.length} domain${
           payload.results.length === 1 ? '' : 's'
-        } with ranked employees and live-detected corporate email formats.`,
+        } with ranked employees and verified corporate emails.`,
       });
     } catch (err) {
       setSyncQueue((prev) =>
@@ -153,6 +164,7 @@ export function useOfflineSyncQueue({
   }, [
     effectiveOffline,
     isSyncing,
+    onBalanceUpdated,
     onSyncedResults,
     setActiveDomain,
     setSessionMode,
