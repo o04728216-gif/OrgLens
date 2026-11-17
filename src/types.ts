@@ -15,7 +15,11 @@ export type SeniorityLevel =
   | 'Lead / Senior'
   | 'Individual Contributor';
 
-export type DiscoverySource = 'Org Chart' | 'LinkedIn Index' | 'Company Site';
+export type DiscoverySource =
+  | 'Org Chart'
+  | 'LinkedIn Index'
+  | 'Company Site'
+  | 'Public Web Verified';
 
 export interface EmailPatternAnalysis {
   detectedFormulaId: EmailFormulaId;
@@ -36,6 +40,9 @@ export interface EmployeeRecord {
   companyName?: string;
   email: string;
   emailAccuracy: number;
+  emailFormulaId?: EmailFormulaId;
+  emailFormulaLabel?: string;
+  emailVerifiedOnWeb?: boolean;
   jobTitle: string;
   industry: string;
   department: DepartmentCategory;
@@ -95,6 +102,9 @@ export interface GlobalCompanyItem {
   industry: string;
   employeeRange: string;
   revenueRange: string;
+  detectedFormulaId?: EmailFormulaId;
+  detectedFormulaLabel?: string;
+  patternConfidence?: number;
   sourceCountrySlug?: string;
   sourceIndustrySlugs?: string[];
 }

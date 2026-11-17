@@ -30,6 +30,11 @@ import {
 } from '../utils/emailFormulas';
 import { copyTextToClipboard, exportEmployeesToCsv } from '../utils/offlineStorage';
 import { scrollToListTop } from '../utils/scrollUtils';
+import { CompanyDrilldownHeader } from './directory/CompanyDrilldownHeader';
+import {
+  PaginationControls,
+  PaginationLoadingBanner,
+} from './directory/PaginationControls';
 
 interface EmployeeTableWidgetProps {
   sessionMode: SessionMode;
@@ -54,20 +59,34 @@ interface EmployeeTableWidgetProps {
   }) => void;
   globalPage?: number;
   onChangeGlobalPage?: (page: number) => void;
+  contactsPage?: number;
+  onChangeContactsPage?: (page: number) => void;
+  urlLocalQuery?: string;
+  onChangeUrlLocalQuery?: (q: string) => void;
 }
 
 interface ComputedRow extends EmployeeRecord {
   resolvedEmail: string;
   resolvedAccuracy: number;
   displayRank: number;
+  activeFormulaLabel: string;
 }
 
 const CONTACTS_PER_PAGE = 500;
 
-function getAccuracyTierLabel(pct: number): {
+function getAccuracyTierLabel(
+  pct: number,
+  verifiedOnWeb?: boolean
+): {
   label: string;
   colorClass: string;
 } {
+  if (verifiedOnWeb) {
+    return {
+      label: 'Web Verified',
+      colorClass: 'text-emerald-700 dark:text-emerald-400',
+    };
+  }
   if (pct >= 90) {
     return {
       label: 'Verified',
@@ -96,7 +115,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   filters,
   onSwitchToFilterSession,
   onFocusDomainInput,
-  onInspectDomainFromFilter,
   filterSelectedCompany = null,
   filterCompanyResult = null,
   isFilterCompanyLoading = false,
@@ -105,11 +123,13 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   onSelectCompanyFromFilterContact,
   globalPage = 1,
   onChangeGlobalPage,
+  contactsPage,
+  onChangeContactsPage,
+  urlLocalQuery,
+  onChangeUrlLocalQuery,
 }) => {
-  const [domainLocalQuery, setDomainLocalQuery] = useState('');
-  const [filterLocalQuery, setFilterLocalQuery] = useState('');
-  const [filterCompanyLocalQuery, setFilterCompanyLocalQuery] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
+  const [internalQuery, setInternalQuery] = useState('');
+  const [internalPage, setInternalPage] = useState(1);
   const [transitioningPage, setTransitioningPage] = useState<number | null>(
     null
   );
@@ -119,11 +139,30 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   const [copiedNamesCount, setCopiedNamesCount] = useState<number | null>(null);
   const [copiedEmailsCount, setCopiedEmailsCount] = useState<number | null>(null);
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
-  const [copiedHeaderMeta, setCopiedHeaderMeta] = useState<
-    'name' | 'website' | null
-  >(null);
   const listTopRef = useRef<HTMLDivElement>(null);
   const pageTimerRef = useRef<number | null>(null);
+
+  const localQuery =
+    urlLocalQuery !== undefined ? urlLocalQuery : internalQuery;
+  const currentPage =
+    contactsPage !== undefined ? contactsPage : internalPage;
+
+  const updateCurrentPage = (pg: number) => {
+    if (onChangeContactsPage) {
+      onChangeContactsPage(pg);
+    } else {
+      setInternalPage(pg);
+    }
+  };
+
+  const setLocalQuery = (val: string) => {
+    if (onChangeUrlLocalQuery) {
+      onChangeUrlLocalQuery(val);
+    } else {
+      setInternalQuery(val);
+    }
+    updateCurrentPage(1);
+  };
 
   useEffect(() => {
     return () => {
@@ -142,7 +181,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   const isViewingFilterCompany =
     sessionMode === 'filter' && Boolean(filterSelectedCompany);
 
-  // Active single-company SearchResponse (either Domain Lookup OR a clicked company inside Filter Explorer)
   const activeSingleCompanyResult =
     sessionMode === 'domain'
       ? domainResult
@@ -150,45 +188,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       ? filterCompanyResult
       : null;
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [
-    sessionMode,
-    domainResult?.domain,
-    filterSelectedCompany?.slug,
-    filterCompanyResult?.domain,
-    filterResult?.fetchedAt,
-    filters.contactSearch,
-    filters.roleKeyword,
-    filters.seniorities,
-    filters.departments,
-    filters.minAccuracy,
-    filters.maxAccuracy,
-  ]);
-
-  useEffect(() => {
-    setFilterCompanyLocalQuery('');
-  }, [filterSelectedCompany?.slug]);
-
-  const localQuery =
-    sessionMode === 'domain'
-      ? domainLocalQuery
-      : isViewingFilterCompany
-      ? filterCompanyLocalQuery
-      : filterLocalQuery;
-
-  const setLocalQuery = (val: string) => {
-    if (sessionMode === 'domain') {
-      setDomainLocalQuery(val);
-    } else if (isViewingFilterCompany) {
-      setFilterCompanyLocalQuery(val);
-    } else {
-      setFilterLocalQuery(val);
-    }
-    setCurrentPage(1);
-  };
-
-  // Detected corporate format for either Domain Lookup or a clicked Filter Explorer company
   const domainFormulaDef = useMemo(() => {
     if (!activeSingleCompanyResult) return null;
     return getExcelFormulaDefinition(
@@ -196,7 +195,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     );
   }, [activeSingleCompanyResult]);
 
-  // Compute active rows cleanly separated by mode (Domain Lookup, Clicked Filter Company, or Multi-Company Filter Cohort)
   const filteredEmployees = useMemo<ComputedRow[]>(() => {
     const qLocal = localQuery.trim().toLowerCase();
 
@@ -208,22 +206,32 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         isViewingFilterCompany && filters.emailFormulaOverride !== 'auto'
           ? filters.emailFormulaOverride
           : detectedId;
+      const overrideDef =
+        formulaId !== detectedId ? getExcelFormulaDefinition(formulaId) : null;
 
       const rows = activeSingleCompanyResult.employees
         .map((emp) => {
-          const resolvedEmail =
-            formulaId === detectedId && emp.email
-              ? emp.email
-              : applyExcelEmailFormula(
-                  emp.fullName,
-                  activeSingleCompanyResult.domain,
-                  formulaId
-                );
+          const keepExactEmail =
+            formulaId === detectedId && Boolean(emp.email);
+          const resolvedEmail = keepExactEmail
+            ? emp.email
+            : applyExcelEmailFormula(
+                emp.fullName,
+                activeSingleCompanyResult.domain,
+                formulaId
+              );
+          const activeFormulaLabel = emp.emailVerifiedOnWeb
+            ? 'Public Web Verified'
+            : overrideDef?.label ||
+              emp.emailFormulaLabel ||
+              activeSingleCompanyResult.emailPattern.formulaLabel;
+
           return {
             ...emp,
             resolvedEmail,
             resolvedAccuracy: emp.emailAccuracy,
             displayRank: emp.rank,
+            activeFormulaLabel,
           };
         })
         .filter((emp) => {
@@ -241,10 +249,13 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       }));
     }
 
-    // Filter Explorer Cohort: uses live filterResult + instant client filter reactivity
     if (!filterResult) return [];
     const qContact = filters.contactSearch.trim().toLowerCase();
     const qRole = filters.roleKeyword.trim().toLowerCase();
+    const overrideDef =
+      filters.emailFormulaOverride !== 'auto'
+        ? getExcelFormulaDefinition(filters.emailFormulaOverride)
+        : null;
 
     const rows = filterResult.employees
       .map((emp) => {
@@ -263,11 +274,19 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
             ? emp.emailAccuracy
             : Math.max(62, emp.emailAccuracy);
 
+        const activeFormulaLabel =
+          filters.emailFormulaOverride === 'auto'
+            ? emp.emailVerifiedOnWeb
+              ? 'Public Web Verified'
+              : emp.emailFormulaLabel || ''
+            : overrideDef?.label || '';
+
         return {
           ...emp,
           resolvedEmail,
           resolvedAccuracy,
           displayRank: emp.rank,
+          activeFormulaLabel,
         };
       })
       .filter((emp) => {
@@ -331,6 +350,12 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     filters.emailFormulaOverride,
   ]);
 
+  const webVerifiedCount = useMemo(
+    () =>
+      filteredEmployees.filter((emp) => Boolean(emp.emailVerifiedOnWeb)).length,
+    [filteredEmployees]
+  );
+
   const totalCompanyBatches = Math.max(1, filterResult?.totalPages || 1);
   const activeCompanyBatch = Math.min(
     Math.max(1, globalPage),
@@ -354,7 +379,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
 
   const safePage = useServerBatchPagination
     ? activeCompanyBatch
-    : Math.min(currentPage, totalPages);
+    : Math.min(Math.max(1, currentPage), totalPages);
 
   const pageStartIndex = useServerBatchPagination
     ? 0
@@ -369,19 +394,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     [filteredEmployees, pageStartIndex]
   );
 
-  const visiblePageNumbers = useMemo(() => {
-    const maxButtons = 9;
-    if (totalPages <= maxButtons) {
-      return Array.from({ length: totalPages }, (_, i) => i + 1);
-    }
-    let start = Math.max(1, safePage - 4);
-    const end = Math.min(totalPages, start + maxButtons - 1);
-    if (end - start + 1 < maxButtons) {
-      start = Math.max(1, end - maxButtons + 1);
-    }
-    return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-  }, [totalPages, safePage]);
-
   const isServerBatchLoading =
     sessionMode === 'filter' &&
     !isViewingFilterCompany &&
@@ -389,7 +401,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     (requestedServerPage !== null ||
       Boolean(filterResult && filterResult.page !== globalPage));
 
-  const isPaginationLoading = isServerBatchLoading || transitioningPage !== null;
+  const isPaginationLoading =
+    isServerBatchLoading || transitioningPage !== null;
 
   const targetCompanyBatch = requestedServerPage ?? activeCompanyBatch;
   const targetPaginationPage = useServerBatchPagination
@@ -402,7 +415,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     scrollToListTop(listTopRef.current);
     if (bounded === globalPage && !isServerBatchLoading) return;
     setRequestedServerPage(bounded);
-    setCurrentPage(1);
+    updateCurrentPage(1);
     onChangeGlobalPage(bounded);
   };
 
@@ -421,10 +434,10 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     }
     setTransitioningPage(bounded);
     pageTimerRef.current = window.setTimeout(() => {
-      setCurrentPage(bounded);
+      updateCurrentPage(bounded);
       setTransitioningPage(null);
       pageTimerRef.current = null;
-    }, 220);
+    }, 200);
   };
 
   const coherentTotalContacts = useMemo(() => {
@@ -443,7 +456,12 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     if (serverLoaded === 0) return baseTotal;
     const ratio = filteredEmployees.length / serverLoaded;
     return Math.max(filteredEmployees.length, Math.round(baseTotal * ratio));
-  }, [sessionMode, isViewingFilterCompany, filterResult, filteredEmployees.length]);
+  }, [
+    sessionMode,
+    isViewingFilterCompany,
+    filterResult,
+    filteredEmployees.length,
+  ]);
 
   const handleCopyFullNameList = async () => {
     if (filteredEmployees.length === 0) return;
@@ -487,126 +505,23 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       ? isFilterCompanyLoading
       : isFilterLoading && !filterResult;
 
-  const selectedCompanyDomain =
-    activeSingleCompanyResult?.domain ||
-    filterSelectedCompany?.domain ||
-    (filterSelectedCompany?.slug ? `${filterSelectedCompany.slug}.com` : '');
-  const selectedCompanyWebsiteUrl =
-    filterSelectedCompany?.websiteUrl ||
-    (selectedCompanyDomain ? `https://${selectedCompanyDomain}` : '');
-
-  const renderFilterCompanyBackBar = () => {
-    if (!isViewingFilterCompany || !filterSelectedCompany) return null;
-    const displayName =
-      activeSingleCompanyResult?.companyName || filterSelectedCompany.name;
-
-    return (
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200/80 dark:border-slate-800/80">
-        <div className="flex flex-wrap items-center gap-3 min-w-0">
-          {onBackToCompaniesList && (
-            <button
-              type="button"
-              onClick={onBackToCompaniesList}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 border border-slate-800 dark:border-slate-700 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to Companies List
-            </button>
-          )}
-
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-display text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                {displayName}
-              </span>
-              <button
-                type="button"
-                onClick={async () => {
-                  const ok = await copyTextToClipboard(displayName);
-                  if (ok) {
-                    setCopiedHeaderMeta('name');
-                    window.setTimeout(() => setCopiedHeaderMeta(null), 1800);
-                  }
-                }}
-                title={`Copy "${displayName}"`}
-                aria-label={`Copy ${displayName}`}
-                className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer shrink-0"
-              >
-                {copiedHeaderMeta === 'name' ? (
-                  <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                ) : (
-                  <Copy className="h-3 w-3" />
-                )}
-              </button>
-
-              {selectedCompanyDomain && (
-                <div className="inline-flex items-center gap-1.5 font-mono text-xs">
-                  <span aria-hidden="true" className="text-slate-400">
-                    ·
-                  </span>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const ok = await copyTextToClipboard(
-                        selectedCompanyWebsiteUrl
-                      );
-                      if (ok) {
-                        setCopiedHeaderMeta('website');
-                        window.setTimeout(
-                          () => setCopiedHeaderMeta(null),
-                          1800
-                        );
-                      }
-                    }}
-                    title={`Copy ${selectedCompanyWebsiteUrl}`}
-                    aria-label={`Copy ${selectedCompanyWebsiteUrl}`}
-                    className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer shrink-0"
-                  >
-                    {copiedHeaderMeta === 'website' ? (
-                      <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                    ) : (
-                      <Copy className="h-3 w-3" />
-                    )}
-                  </button>
-                  <a
-                    href={selectedCompanyWebsiteUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400 hover:underline underline-offset-4"
-                  >
-                    <span>{selectedCompanyDomain}</span>
-                    <ExternalLink className="h-3 w-3 shrink-0" />
-                  </a>
-                </div>
-              )}
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-              {activeSingleCompanyResult?.headquarters ||
-                filterSelectedCompany.location}
-              {(activeSingleCompanyResult?.industry ||
-                filterSelectedCompany.industry) &&
-                ` · ${
-                  activeSingleCompanyResult?.industry ||
-                  filterSelectedCompany.industry
-                }`}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   if (isInitialLoading) {
     return (
       <div className="space-y-4" aria-busy="true" aria-live="polite">
-        {renderFilterCompanyBackBar()}
+        {isViewingFilterCompany && filterSelectedCompany && (
+          <CompanyDrilldownHeader
+            company={filterSelectedCompany}
+            companyResult={activeSingleCompanyResult}
+            onBackToCompaniesList={onBackToCompaniesList}
+          />
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
           <span>
             {sessionMode === 'domain' || isViewingFilterCompany ? (
               <>
-                Indexing full roster, MX mail servers, and corporate email format
-                for{' '}
+                Detecting live highest-% email format on the web, MX servers,
+                and full roster for{' '}
                 <strong className="font-mono text-slate-800 dark:text-slate-200">
                   {isViewingFilterCompany
                     ? filterSelectedCompany?.name || 'company'
@@ -616,8 +531,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               </>
             ) : (
               <>
-                Auto-loading live contacts, corporate emails, and job titles
-                matching your active filters...
+                Auto-loading live contacts, per-company email formats, and job
+                titles matching your active filters...
               </>
             )}
           </span>
@@ -664,7 +579,6 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     );
   }
 
-  // Domain Lookup Session Empty State (no domain autofilled on boot!)
   if (sessionMode === 'domain' && !domainResult) {
     return (
       <div className="py-12 px-4 text-center">
@@ -673,7 +587,9 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           Enter any company domain above to extract Full Names, Emails &amp; Job Titles
         </h4>
         <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
-          Domain Lookup detects the organization&apos;s verified email format, calculates accuracy scores, and ranks every contact from executive leadership to entry-level roles.
+          Domain Lookup searches the live web for each organization&apos;s
+          highest-percentage email format, harvests publicly verified addresses,
+          and ranks every contact from executive leadership to entry-level roles.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
           <button
@@ -697,10 +613,20 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     );
   }
 
-  if (isViewingFilterCompany && filterCompanyError && !activeSingleCompanyResult) {
+  if (
+    isViewingFilterCompany &&
+    filterCompanyError &&
+    !activeSingleCompanyResult
+  ) {
     return (
       <div className="space-y-4">
-        {renderFilterCompanyBackBar()}
+        {filterSelectedCompany && (
+          <CompanyDrilldownHeader
+            company={filterSelectedCompany}
+            companyResult={activeSingleCompanyResult}
+            onBackToCompaniesList={onBackToCompaniesList}
+          />
+        )}
         <div className="py-10 px-4 text-center rounded-xl border border-slate-200/80 dark:border-slate-800/80">
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
             {filterCompanyError}
@@ -722,7 +648,13 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
 
   return (
     <div ref={listTopRef} className="space-y-4 scroll-mt-24">
-      {renderFilterCompanyBackBar()}
+      {isViewingFilterCompany && filterSelectedCompany && (
+        <CompanyDrilldownHeader
+          company={filterSelectedCompany}
+          companyResult={activeSingleCompanyResult}
+          onBackToCompaniesList={onBackToCompaniesList}
+        />
+      )}
 
       {/* Top Session Metadata Line */}
       {(sessionMode === 'domain' || isViewingFilterCompany) &&
@@ -738,12 +670,28 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
             {activeSingleCompanyResult.emailPattern.patternConfidence}% Pattern
             Accuracy
           </span>
+          {webVerifiedCount > 0 && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono tabular-nums font-semibold text-sky-700 dark:text-sky-400">
+                {webVerifiedCount.toLocaleString()} Public Web Verified
+              </span>
+            </>
+          )}
           <span aria-hidden="true">·</span>
           <span>
             {activeSingleCompanyResult.emailPattern.mxVerified
               ? `MX Verified (${activeSingleCompanyResult.emailPattern.mxProvider})`
               : 'Standard Domain Routing'}
           </span>
+          {activeSingleCompanyResult.emailPattern.detectionBasis && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-slate-500 dark:text-slate-400">
+                {activeSingleCompanyResult.emailPattern.detectionBasis}
+              </span>
+            </>
+          )}
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-300 px-1">
@@ -791,7 +739,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         </div>
       )}
 
-      {/* Toolbar: Search Input + Copy Full Name List + Copy Email List + Export CSV */}
+      {/* Toolbar: Search Input + Domain-Only Copy Buttons + Batch Stepper + Export CSV */}
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
         <div className="relative flex-1 max-w-md">
           <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -872,7 +820,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
             </>
           )}
 
-          {/* Filter Explorer Multi-Batch Stepper: Load next/previous 500-company batch on demand */}
+          {/* Filter Explorer Multi-Batch Stepper */}
           {sessionMode === 'filter' &&
             !isViewingFilterCompany &&
             totalCompanyBatches > 1 &&
@@ -891,7 +839,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                   Prev Batch
                 </button>
                 <span className="px-2 text-xs font-mono tabular-nums font-semibold text-sky-700 dark:text-sky-400 whitespace-nowrap">
-                  Batch {(isServerBatchLoading
+                  Batch{' '}
+                  {(isServerBatchLoading
                     ? targetCompanyBatch
                     : activeCompanyBatch
                   ).toLocaleString()}{' '}
@@ -953,6 +902,12 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           <strong className="text-slate-700 dark:text-slate-200">
             Most Important → Least Important
           </strong>
+          {sessionMode === 'filter' && !isViewingFilterCompany && (
+            <span className="hidden sm:inline">
+              {' '}
+              · Auto-detected unique email format per company
+            </span>
+          )}
         </span>
         <span className="font-mono tabular-nums whitespace-nowrap">
           {filteredEmployees.length === 0
@@ -964,23 +919,16 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       </div>
 
       {isPaginationLoading && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl border border-sky-500/40 bg-sky-500/10 dark:bg-sky-500/15 text-xs font-semibold text-sky-800 dark:text-sky-200"
-        >
-          <span className="inline-flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
-            <span>
-              {isServerBatchLoading
-                ? `Loading Company Batch ${targetCompanyBatch.toLocaleString()} of ${totalCompanyBatches.toLocaleString()} (500 matching companies)...`
-                : `Loading page ${targetPaginationPage.toLocaleString()} of ${totalPages.toLocaleString()}...`}
-            </span>
-          </span>
-          <span className="font-mono tabular-nums text-[11px] text-sky-700/85 dark:text-sky-300/85">
-            {isServerBatchLoading ? '500 companies/batch' : '500 contacts/page'}
-          </span>
-        </div>
+        <PaginationLoadingBanner
+          message={
+            isServerBatchLoading
+              ? `Loading Company Batch ${targetCompanyBatch.toLocaleString()} of ${totalCompanyBatches.toLocaleString()} (500 matching companies)...`
+              : `Loading page ${targetPaginationPage.toLocaleString()} of ${totalPages.toLocaleString()}...`
+          }
+          rightMeta={
+            isServerBatchLoading ? '500 companies/batch' : '500 contacts/page'
+          }
+        />
       )}
 
       {/* Full Names + Emails + Job Title + Accuracy % HTML <table> */}
@@ -1017,201 +965,175 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           )}
           <div
             className={`overflow-x-auto rounded-xl transition-opacity duration-150 ${
-              isPaginationLoading ? 'opacity-45 pointer-events-none' : 'opacity-100'
+              isPaginationLoading
+                ? 'opacity-45 pointer-events-none'
+                : 'opacity-100'
             }`}
           >
             <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/75 dark:bg-slate-900/75 text-xs font-semibold text-slate-600 dark:text-slate-300">
-                <th scope="col" className="py-3 px-4 w-14 font-mono">
-                  Rank
-                </th>
-                <th scope="col" className="py-3 px-4">
-                  Full Name
-                </th>
-                <th scope="col" className="py-3 px-4">
-                  Email Address
-                </th>
-                <th scope="col" className="py-3 px-4">
-                  Job Title
-                </th>
-                <th
-                  scope="col"
-                  className="py-3 px-4 text-right whitespace-nowrap"
-                >
-                  Accuracy
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm">
-              {displayedEmployees.map((emp) => {
-                const tier = getAccuracyTierLabel(emp.resolvedAccuracy);
-                const isRowCopied = copiedRowId === emp.id;
-
-                return (
-                  <tr
-                    key={emp.id}
-                    className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
+              <thead>
+                <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/75 dark:bg-slate-900/75 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  <th scope="col" className="py-3 px-4 w-14 font-mono">
+                    Rank
+                  </th>
+                  <th scope="col" className="py-3 px-4">
+                    Full Name
+                  </th>
+                  <th scope="col" className="py-3 px-4">
+                    Email Address
+                  </th>
+                  <th scope="col" className="py-3 px-4">
+                    Job Title
+                  </th>
+                  <th
+                    scope="col"
+                    className="py-3 px-4 text-right whitespace-nowrap"
                   >
-                    <td className="py-2.5 px-4 font-mono tabular-nums text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
-                      {emp.displayRank}
-                    </td>
+                    Accuracy
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm">
+                {displayedEmployees.map((emp) => {
+                  const tier = getAccuracyTierLabel(
+                    emp.resolvedAccuracy,
+                    emp.emailVerifiedOnWeb
+                  );
+                  const isRowCopied = copiedRowId === emp.id;
 
-                    <td className="py-2.5 px-4 whitespace-nowrap">
-                      <div className="font-medium text-slate-900 dark:text-slate-100">
-                        {emp.fullName}
-                      </div>
-                      {sessionMode === 'filter' && !isViewingFilterCompany && (
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-0.5">
-                          {onSelectCompanyFromFilterContact && emp.domain ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onSelectCompanyFromFilterContact({
-                                  slug: emp.domain.split('.')[0] || emp.domain,
-                                  name: emp.companyName || emp.domain,
-                                  domain: emp.domain,
-                                })
-                              }
-                              className="truncate max-w-44 font-medium text-slate-700 dark:text-slate-300 hover:text-sky-600 dark:hover:text-sky-400 hover:underline cursor-pointer"
-                            >
-                              {emp.companyName || emp.domain}
-                            </button>
-                          ) : (
-                            <span className="truncate max-w-44">
-                              {emp.companyName || emp.domain}
-                            </span>
-                          )}
-                          {emp.domain && (
-                            <>
-                              <span aria-hidden="true">·</span>
-                              <a
-                                href={`https://${emp.domain}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="font-mono text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300 hover:underline inline-flex items-center gap-0.5"
-                              >
-                                <span>{emp.domain}</span>
-                                <ExternalLink className="h-2.5 w-2.5 shrink-0" />
-                              </a>
-                            </>
-                          )}
+                  return (
+                    <tr
+                      key={emp.id}
+                      className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
+                    >
+                      <td className="py-2.5 px-4 font-mono tabular-nums text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
+                        {emp.displayRank}
+                      </td>
+
+                      <td className="py-2.5 px-4 whitespace-nowrap">
+                        <div className="font-medium text-slate-900 dark:text-slate-100">
+                          {emp.fullName}
                         </div>
-                      )}
-                    </td>
-
-                    <td className="py-2.5 px-4 font-mono text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-nowrap">
-                      {emp.resolvedEmail ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleCopySingleEmail(
-                              emp.id,
-                              emp.resolvedEmail
-                            )
-                          }
-                          title="Click to copy email address"
-                          className="group inline-flex items-center gap-2 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer text-left"
-                        >
-                          <span>{emp.resolvedEmail}</span>
-                          {isRowCopied ? (
-                            <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                          ) : (
-                            <Copy className="h-3 w-3 opacity-0 group-hover:opacity-75 transition-opacity shrink-0" />
-                          )}
-                        </button>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-
-                    <td className="py-2.5 px-4 text-xs sm:text-sm text-slate-700 dark:text-slate-300 min-w-48">
-                      {emp.jobTitle}
-                    </td>
-
-                    <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center justify-end gap-1.5 text-xs font-mono tabular-nums font-semibold ${tier.colorClass}`}
-                      >
-                        {emp.resolvedAccuracy >= 90 && (
-                          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                        {sessionMode === 'filter' && !isViewingFilterCompany && (
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-0.5">
+                            {onSelectCompanyFromFilterContact && emp.domain ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onSelectCompanyFromFilterContact({
+                                    slug:
+                                      emp.domain.split('.')[0] || emp.domain,
+                                    name: emp.companyName || emp.domain,
+                                    domain: emp.domain,
+                                  })
+                                }
+                                className="truncate max-w-44 font-medium text-slate-700 dark:text-slate-300 hover:text-sky-600 dark:hover:text-sky-400 hover:underline cursor-pointer"
+                              >
+                                {emp.companyName || emp.domain}
+                              </button>
+                            ) : (
+                              <span className="truncate max-w-44">
+                                {emp.companyName || emp.domain}
+                              </span>
+                            )}
+                            {emp.domain && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <a
+                                  href={`https://${emp.domain}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="font-mono text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300 hover:underline inline-flex items-center gap-0.5"
+                                >
+                                  <span>{emp.domain}</span>
+                                  <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                                </a>
+                              </>
+                            )}
+                            {emp.activeFormulaLabel && (
+                              <>
+                                <span
+                                  aria-hidden="true"
+                                  className="hidden lg:inline"
+                                >
+                                  ·
+                                </span>
+                                <span className="hidden lg:inline font-mono text-[10px] text-slate-400 dark:text-slate-500">
+                                  {emp.activeFormulaLabel.split('(')[0].trim()}
+                                </span>
+                              </>
+                            )}
+                          </div>
                         )}
-                        <span>{emp.resolvedAccuracy}%</span>
-                        <span className="font-sans font-normal text-slate-500 dark:text-slate-400 hidden sm:inline">
-                          · {tier.label}
+                      </td>
+
+                      <td className="py-2.5 px-4 font-mono text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-nowrap">
+                        {emp.resolvedEmail ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCopySingleEmail(
+                                emp.id,
+                                emp.resolvedEmail
+                              )
+                            }
+                            title="Click to copy email address"
+                            className="group inline-flex items-center gap-2 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer text-left"
+                          >
+                            <span>{emp.resolvedEmail}</span>
+                            {isRowCopied ? (
+                              <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                            ) : (
+                              <Copy className="h-3 w-3 opacity-0 group-hover:opacity-75 transition-opacity shrink-0" />
+                            )}
+                          </button>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+
+                      <td className="py-2.5 px-4 text-xs sm:text-sm text-slate-700 dark:text-slate-300 min-w-48">
+                        {emp.jobTitle}
+                      </td>
+
+                      <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center justify-end gap-1.5 text-xs font-mono tabular-nums font-semibold ${tier.colorClass}`}
+                        >
+                          {emp.resolvedAccuracy >= 90 && (
+                            <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                          )}
+                          <span>{emp.resolvedAccuracy}%</span>
+                          <span className="font-sans font-normal text-slate-500 dark:text-slate-400 hidden sm:inline">
+                            · {tier.label}
+                          </span>
                         </span>
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
       {/* 500/Page Pagination Bar */}
-      {totalPages > 1 && (
-        <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
-          <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-            {isPaginationLoading ? (
-              <span className="inline-flex items-center gap-1.5 font-sans font-semibold text-sky-600 dark:text-sky-400">
-                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                Loading page {targetPaginationPage.toLocaleString()} of{' '}
-                {totalPages.toLocaleString()}...
-              </span>
-            ) : (
-              <>
-                Page {safePage.toLocaleString()} of{' '}
-                {totalPages.toLocaleString()} · 500/page
-              </>
-            )}
-          </span>
-          <div className="flex items-center gap-1 flex-wrap">
-            <button
-              type="button"
-              disabled={safePage <= 1 || isPaginationLoading}
-              onClick={() => handleSelectContactsPage(safePage - 1)}
-              aria-label="Previous contacts page"
-              className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-            </button>
-            {visiblePageNumbers.map((pg) => {
-              const isTargetLoading =
-                isPaginationLoading && pg === targetPaginationPage;
-              return (
-                <button
-                  key={pg}
-                  type="button"
-                  disabled={isPaginationLoading}
-                  onClick={() => handleSelectContactsPage(pg)}
-                  className={`inline-flex items-center justify-center gap-1.5 min-w-8 h-8 px-2 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors cursor-pointer ${
-                    pg === safePage || isTargetLoading
-                      ? 'bg-sky-600 text-white shadow-xs'
-                      : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  {isTargetLoading && (
-                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                  )}
-                  <span>{pg}</span>
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              disabled={safePage >= totalPages || isPaginationLoading}
-              onClick={() => handleSelectContactsPage(safePage + 1)}
-              aria-label="Next contacts page"
-              className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
-            >
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
+      <PaginationControls
+        currentPage={safePage}
+        totalPages={totalPages}
+        isLoading={isPaginationLoading}
+        targetPage={targetPaginationPage}
+        perPageLabel={
+          useServerBatchPagination ? '500 orgs/batch' : '500/page'
+        }
+        loadingLabel={
+          isServerBatchLoading
+            ? `Loading Company Batch ${targetCompanyBatch.toLocaleString()} of ${totalCompanyBatches.toLocaleString()}...`
+            : undefined
+        }
+        onSelectPage={handleSelectContactsPage}
+      />
     </div>
   );
 };

@@ -1,8 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
   Crown,
   ExternalLink,
   Loader2,
@@ -17,12 +14,17 @@ import type {
   GlobalCompanyItem,
   SearchResponse,
   SeniorityLevel,
-  SeniorityStat,
   SessionMode,
   SidebarFiltersState,
 } from '../types';
 import { applyExcelEmailFormula } from '../utils/emailFormulas';
 import { scrollToListTop } from '../utils/scrollUtils';
+import { computeExactSeniorityStats } from '../utils/seniorityStats';
+import { CompanyDrilldownHeader } from './directory/CompanyDrilldownHeader';
+import {
+  PaginationControls,
+  PaginationLoadingBanner,
+} from './directory/PaginationControls';
 
 interface JobTitleTabProps {
   sessionMode: SessionMode;
@@ -43,85 +45,13 @@ interface JobTitleTabProps {
   onBackToCompaniesList?: () => void;
   globalPage?: number;
   onChangeGlobalPage?: (page: number) => void;
+  rolesPage?: number;
+  onChangeRolesPage?: (page: number) => void;
+  urlRoleQuery?: string;
+  onChangeUrlRoleQuery?: (q: string) => void;
 }
 
 const ROLES_PER_PAGE = 500;
-
-const ORDERED_SENIORITY_TIERS: SeniorityLevel[] = [
-  'Executive',
-  'Director / VP',
-  'Lead / Senior',
-  'Individual Contributor',
-];
-
-function computeExactSeniorityStats(
-  employees: EmployeeRecord[]
-): SeniorityStat[] {
-  const countsMap = new Map<SeniorityLevel, number>(
-    ORDERED_SENIORITY_TIERS.map((tier) => [tier, 0])
-  );
-  for (const emp of employees) {
-    countsMap.set(emp.seniority, (countsMap.get(emp.seniority) || 0) + 1);
-  }
-
-  const counts = ORDERED_SENIORITY_TIERS.map(
-    (tier) => countsMap.get(tier) || 0
-  );
-  const total = counts.reduce((acc, c) => acc + c, 0);
-
-  if (total <= 0) {
-    return ORDERED_SENIORITY_TIERS.map((seniority) => ({
-      seniority,
-      count: 0,
-      percentage: 0,
-    }));
-  }
-
-  // Largest Remainder method so percentages sum strictly to 100%
-  const exactQuotas = counts.map((c) => (c / total) * 100);
-  const floors = exactQuotas.map((q) => Math.floor(q));
-  let remainderUnits = 100 - floors.reduce((acc, f) => acc + f, 0);
-
-  const rankedIndices = exactQuotas
-    .map((q, idx) => ({
-      idx,
-      rem: q - floors[idx],
-      count: counts[idx],
-    }))
-    .sort((a, b) => {
-      if (b.rem !== a.rem) return b.rem - a.rem;
-      return b.count - a.count;
-    });
-
-  for (let i = 0; i < rankedIndices.length && remainderUnits > 0; i++) {
-    if (rankedIndices[i].count > 0) {
-      floors[rankedIndices[i].idx] += 1;
-      remainderUnits -= 1;
-    }
-  }
-
-  // Ensure any non-zero seniority tier displays at least 1% while keeping sum === 100%
-  for (let i = 0; i < counts.length; i++) {
-    if (counts[i] > 0 && floors[i] === 0) {
-      let donorIdx = -1;
-      for (let j = 0; j < floors.length; j++) {
-        if (floors[j] > 1 && (donorIdx === -1 || floors[j] > floors[donorIdx])) {
-          donorIdx = j;
-        }
-      }
-      if (donorIdx !== -1) {
-        floors[donorIdx] -= 1;
-        floors[i] = 1;
-      }
-    }
-  }
-
-  return ORDERED_SENIORITY_TIERS.map((seniority, idx) => ({
-    seniority,
-    count: counts[idx],
-    percentage: floors[idx],
-  }));
-}
 
 export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   sessionMode,
@@ -142,10 +72,13 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   onBackToCompaniesList,
   globalPage = 1,
   onChangeGlobalPage,
+  rolesPage,
+  onChangeRolesPage,
+  urlRoleQuery,
+  onChangeUrlRoleQuery,
 }) => {
-  const [domainRoleFilter, setDomainRoleFilter] = useState('');
-  const [filterSessionRoleFilter, setFilterSessionRoleFilter] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
+  const [internalRoleFilter, setInternalRoleFilter] = useState('');
+  const [internalPage, setInternalPage] = useState(1);
   const [transitioningPage, setTransitioningPage] = useState<number | null>(
     null
   );
@@ -154,6 +87,27 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   );
   const listTopRef = useRef<HTMLDivElement>(null);
   const pageTimerRef = useRef<number | null>(null);
+
+  const roleFilter =
+    urlRoleQuery !== undefined ? urlRoleQuery : internalRoleFilter;
+  const currentPage = rolesPage !== undefined ? rolesPage : internalPage;
+
+  const updateCurrentPage = (pg: number) => {
+    if (onChangeRolesPage) {
+      onChangeRolesPage(pg);
+    } else {
+      setInternalPage(pg);
+    }
+  };
+
+  const setRoleFilter = (val: string) => {
+    if (onChangeUrlRoleQuery) {
+      onChangeUrlRoleQuery(val);
+    } else {
+      setInternalRoleFilter(val);
+    }
+    updateCurrentPage(1);
+  };
 
   useEffect(() => {
     return () => {
@@ -178,30 +132,6 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
       ? filterCompanyResult
       : null;
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [
-    sessionMode,
-    domainResult?.domain,
-    filterSelectedCompany?.slug,
-    filterCompanyResult?.domain,
-    filterResult?.fetchedAt,
-    selectedDepartment,
-    selectedSeniority,
-  ]);
-
-  const roleFilter =
-    sessionMode === 'domain' ? domainRoleFilter : filterSessionRoleFilter;
-  const setRoleFilter = (val: string) => {
-    if (sessionMode === 'domain') {
-      setDomainRoleFilter(val);
-    } else {
-      setFilterSessionRoleFilter(val);
-    }
-    setCurrentPage(1);
-  };
-
-  // Resolve session-specific source employees (Domain Session & Filter Selected Company use whole roster)
   const sessionEmployees = useMemo<EmployeeRecord[]>(() => {
     if (sessionMode === 'domain' || isViewingFilterCompany) {
       return activeSingleCompanyResult
@@ -282,7 +212,6 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     ];
   }, [sessionEmployees]);
 
-  // Cohort filtered by local role keyword + department (before clicking a Seniority Tier card)
   const cohortBeforeSenioritySelection = useMemo(() => {
     const q = roleFilter.trim().toLowerCase();
     return sessionEmployees.filter((emp) => {
@@ -299,13 +228,11 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     });
   }, [sessionEmployees, selectedDepartment, roleFilter]);
 
-  // Exact Seniority Tier Breakdown (counts & percentages always sum to cohortBeforeSenioritySelection.length and 100%)
   const accurateSeniorityStats = useMemo(
     () => computeExactSeniorityStats(cohortBeforeSenioritySelection),
     [cohortBeforeSenioritySelection]
   );
 
-  // Final displayed rows after applying selectedSeniority card toggle
   const filtered = useMemo(() => {
     const list =
       selectedSeniority === 'All'
@@ -350,8 +277,8 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     : localTotalPages;
 
   const safePage = useServerBatchPagination
-    ? Math.min(globalPage, totalPages)
-    : Math.min(currentPage, totalPages);
+    ? Math.min(Math.max(1, globalPage), totalPages)
+    : Math.min(Math.max(1, currentPage), totalPages);
 
   const pageStartIndex = useServerBatchPagination
     ? 0
@@ -361,19 +288,6 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     () => filtered.slice(pageStartIndex, pageStartIndex + ROLES_PER_PAGE),
     [filtered, pageStartIndex]
   );
-
-  const visiblePageNumbers = useMemo(() => {
-    const maxButtons = 9;
-    if (totalPages <= maxButtons) {
-      return Array.from({ length: totalPages }, (_, i) => i + 1);
-    }
-    let start = Math.max(1, safePage - 4);
-    const end = Math.min(totalPages, start + maxButtons - 1);
-    if (end - start + 1 < maxButtons) {
-      start = Math.max(1, end - maxButtons + 1);
-    }
-    return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-  }, [totalPages, safePage]);
 
   const isPaginationLoading = useServerBatchPagination
     ? isFilterLoading &&
@@ -402,10 +316,10 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     }
     setTransitioningPage(bounded);
     pageTimerRef.current = window.setTimeout(() => {
-      setCurrentPage(bounded);
+      updateCurrentPage(bounded);
       setTransitioningPage(null);
       pageTimerRef.current = null;
-    }, 220);
+    }, 200);
   };
 
   const isInitialLoading =
@@ -418,17 +332,12 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   if (isInitialLoading) {
     return (
       <div className="space-y-4">
-        {isViewingFilterCompany && onBackToCompaniesList && (
-          <div className="pb-3 border-b border-slate-200/80 dark:border-slate-800/80">
-            <button
-              type="button"
-              onClick={onBackToCompaniesList}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 transition-colors cursor-pointer"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to Companies List
-            </button>
-          </div>
+        {isViewingFilterCompany && filterSelectedCompany && (
+          <CompanyDrilldownHeader
+            company={filterSelectedCompany}
+            companyResult={activeSingleCompanyResult}
+            onBackToCompaniesList={onBackToCompaniesList}
+          />
         )}
         <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
           <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
@@ -446,7 +355,9 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
           Command Hierarchy awaits a company domain lookup
         </h4>
         <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
-          Search any company domain above to map its Executive, Director / VP, Lead / Senior, and Individual Contributor tiers with exact counts and percentages.
+          Search any company domain above to map its Executive, Director / VP,
+          Lead / Senior, and Individual Contributor tiers with exact counts and
+          percentages.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
           <button
@@ -472,26 +383,15 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
 
   return (
     <div ref={listTopRef} className="space-y-5 scroll-mt-24">
-      {isViewingFilterCompany && filterSelectedCompany && onBackToCompaniesList && (
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200/80 dark:border-slate-800/80">
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={onBackToCompaniesList}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to Companies List
-            </button>
-            <span className="font-display text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-              {activeSingleCompanyResult?.companyName ||
-                filterSelectedCompany.name}
-            </span>
-          </div>
-        </div>
+      {isViewingFilterCompany && filterSelectedCompany && (
+        <CompanyDrilldownHeader
+          company={filterSelectedCompany}
+          companyResult={activeSingleCompanyResult}
+          onBackToCompaniesList={onBackToCompaniesList}
+        />
       )}
 
-      {/* Exact 4-Tier Seniority Distribution Cards (Executive, Director / VP, Lead / Senior, Individual Contributor) */}
+      {/* Exact 4-Tier Seniority Distribution Cards */}
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 px-0.5">
           <span>
@@ -521,7 +421,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
                 type="button"
                 onClick={() => {
                   onSelectSeniority(active ? 'All' : tier.seniority);
-                  setCurrentPage(1);
+                  updateCurrentPage(1);
                 }}
                 className={`text-left p-3.5 rounded-xl border transition-all duration-150 cursor-pointer ${
                   active
@@ -579,7 +479,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
                 type="button"
                 onClick={() => {
                   onSelectDepartment(dept);
-                  setCurrentPage(1);
+                  updateCurrentPage(1);
                 }}
                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all duration-150 cursor-pointer whitespace-nowrap shrink-0 ${
                   active
@@ -599,7 +499,11 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
         <span>
           {selectedSeniority !== 'All' ? (
             <>
-              Filtered to <strong className="text-slate-800 dark:text-slate-200">{selectedSeniority}</strong> tier
+              Filtered to{' '}
+              <strong className="text-slate-800 dark:text-slate-200">
+                {selectedSeniority}
+              </strong>{' '}
+              tier
             </>
           ) : (
             'All authority tiers ordered Most Important → Least Important'
@@ -615,22 +519,10 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
       </div>
 
       {isPaginationLoading && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl border border-sky-500/40 bg-sky-500/10 dark:bg-sky-500/15 text-xs font-semibold text-sky-800 dark:text-sky-200"
-        >
-          <span className="inline-flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
-            <span>
-              Loading page {targetPaginationPage.toLocaleString()} of{' '}
-              {totalPages.toLocaleString()}...
-            </span>
-          </span>
-          <span className="font-mono tabular-nums text-[11px] text-sky-700/85 dark:text-sky-300/85">
-            500 roles/page
-          </span>
-        </div>
+        <PaginationLoadingBanner
+          message={`Loading page ${targetPaginationPage.toLocaleString()} of ${totalPages.toLocaleString()}...`}
+          rightMeta="500 roles/page"
+        />
       )}
 
       {/* Ranked Command Hierarchy HTML <table> */}
@@ -654,7 +546,9 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
           )}
           <div
             className={`overflow-x-auto rounded-xl transition-opacity duration-150 ${
-              isPaginationLoading ? 'opacity-45 pointer-events-none' : 'opacity-100'
+              isPaginationLoading
+                ? 'opacity-45 pointer-events-none'
+                : 'opacity-100'
             }`}
           >
             <table className="w-full text-left border-collapse">
@@ -729,66 +623,16 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
         </div>
       )}
 
-      {totalPages > 1 && (
-        <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
-          <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-            {isPaginationLoading ? (
-              <span className="inline-flex items-center gap-1.5 font-sans font-semibold text-sky-600 dark:text-sky-400">
-                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                Loading page {targetPaginationPage.toLocaleString()} of{' '}
-                {totalPages.toLocaleString()}...
-              </span>
-            ) : (
-              <>
-                Page {safePage.toLocaleString()} of{' '}
-                {totalPages.toLocaleString()} · 500/page
-              </>
-            )}
-          </span>
-          <div className="flex items-center gap-1 flex-wrap">
-            <button
-              type="button"
-              disabled={safePage <= 1 || isPaginationLoading}
-              onClick={() => handleSelectRolesPage(safePage - 1)}
-              aria-label="Previous roles page"
-              className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-            </button>
-            {visiblePageNumbers.map((pg) => {
-              const isTargetLoading =
-                isPaginationLoading && pg === targetPaginationPage;
-              return (
-                <button
-                  key={pg}
-                  type="button"
-                  disabled={isPaginationLoading}
-                  onClick={() => handleSelectRolesPage(pg)}
-                  className={`inline-flex items-center justify-center gap-1.5 min-w-8 h-8 px-2 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors cursor-pointer ${
-                    pg === safePage || isTargetLoading
-                      ? 'bg-sky-600 text-white shadow-xs'
-                      : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  {isTargetLoading && (
-                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                  )}
-                  <span>{pg}</span>
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              disabled={safePage >= totalPages || isPaginationLoading}
-              onClick={() => handleSelectRolesPage(safePage + 1)}
-              aria-label="Next roles page"
-              className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
-            >
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
+      <PaginationControls
+        currentPage={safePage}
+        totalPages={totalPages}
+        isLoading={isPaginationLoading}
+        targetPage={targetPaginationPage}
+        perPageLabel={
+          useServerBatchPagination ? '500 orgs/batch' : '500/page'
+        }
+        onSelectPage={handleSelectRolesPage}
+      />
     </div>
   );
 };

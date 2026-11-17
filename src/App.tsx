@@ -1,25 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, Reorder, motion, useDragControls } from 'motion/react';
-import {
-  ArrowDown,
-  ArrowUp,
-  Building2,
-  CloudOff,
-  Crown,
-  Eye,
-  EyeOff,
-  Globe,
-  GripVertical,
-  LayoutGrid,
-  Loader2,
-  Moon,
-  RotateCcw,
-  Search,
-  SlidersHorizontal,
-  Smartphone,
-  Sun,
-  Users,
-} from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Building2, Crown, Users } from 'lucide-react';
 import type {
   DepartmentCategory,
   FilterExplorerResponse,
@@ -31,7 +12,6 @@ import type {
   SeniorityLevel,
   SessionMode,
   SidebarFiltersState,
-  SyncQueueItem,
   WidgetConfig,
   WidgetId,
 } from './types';
@@ -39,46 +19,36 @@ import {
   DEFAULT_WIDGETS,
   loadSavedTheme,
   loadSnapshots,
-  loadSyncQueue,
   loadWidgetConfigs,
   saveSnapshots,
-  saveSyncQueue,
   saveTheme,
   saveWidgetConfigs,
 } from './utils/offlineStorage';
-import { AnalyticsWidget } from './components/AnalyticsWidget';
 import { EmployeeTableWidget } from './components/EmployeeTableWidget';
 import { JobTitleTab } from './components/JobTitleTab';
 import { IndustryTab } from './components/IndustryTab';
-import { SavedDomainsWidget } from './components/SavedDomainsWidget';
-import { OfflineSyncWidget } from './components/OfflineSyncWidget';
 import {
   FilterSidebar,
-  MobileFilterTriggerButton,
   countActiveSidebarFilters,
 } from './components/FilterSidebar';
+import { INITIAL_SIDEBAR_FILTERS } from './components/sidebar/sidebarConstants';
 import { applyExcelEmailFormula } from './utils/emailFormulas';
 import { usePWAInstall } from './hooks/usePWAInstall';
+import { useOfflineSyncQueue } from './hooks/useOfflineSyncQueue';
+import { useUrlRouterSync } from './hooks/useUrlRouterSync';
 import { scrollToListTop } from './utils/scrollUtils';
-
-const INITIAL_SIDEBAR_FILTERS: SidebarFiltersState = {
-  contactSearch: '',
-  roleKeyword: '',
-  seniorities: [],
-  departments: [],
-  minAccuracy: 50,
-  maxAccuracy: 99,
-  emailFormulaOverride: 'auto',
-  companyNameFilter: '',
-  selectedIndustrySlugs: [],
-  industryMatchMode: 'any',
-  industryKeyword: '',
-  employeeRanges: [],
-  revenueRanges: [],
-  selectedContinents: [],
-  selectedCountries: [],
-  locationQuery: '',
-};
+import { parseUrlToAppState, type UrlRoutedState } from './utils/urlRouter';
+import {
+  TopNavHeader,
+  type PrimaryTabConfig,
+} from './components/layout/TopNavHeader';
+import {
+  HeroDomainSearchSection,
+  type StatusBannerState,
+} from './components/layout/HeroDomainSearchSection';
+import { RouteAddressBar } from './components/layout/RouteAddressBar';
+import { SessionAndTabsBar } from './components/layout/SessionAndTabsBar';
+import { WidgetsDrawerBoard } from './components/layout/WidgetsDrawerBoard';
 
 function sanitizeClientDomain(input: string): string {
   return input
@@ -92,96 +62,51 @@ function sanitizeClientDomain(input: string): string {
     .replace(/^@/, '');
 }
 
-interface DraggableWidgetCardProps {
-  widget: WidgetConfig;
-  index: number;
-  totalVisible: number;
-  onMove: (id: WidgetId, direction: 'up' | 'down') => void;
-  children: React.ReactNode;
-}
-
-const DraggableWidgetCard: React.FC<DraggableWidgetCardProps> = ({
-  widget,
-  index,
-  totalVisible,
-  onMove,
-  children,
-}) => {
-  const dragControls = useDragControls();
-
-  return (
-    <Reorder.Item
-      value={widget}
-      dragListener={false}
-      dragControls={dragControls}
-      layout="position"
-      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-      className="rounded-2xl backdrop-blur-xl bg-white/75 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 shadow-xs"
-    >
-      <div className="flex items-center justify-between gap-4 px-5 sm:px-6 py-4 border-b border-slate-200/70 dark:border-slate-800/80">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            type="button"
-            aria-label={`Drag to reorder ${widget.title}`}
-            title="Drag to reorder widget"
-            onPointerDown={(e) => dragControls.start(e)}
-            className="p-1.5 -ml-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 dark:text-slate-500 dark:hover:text-slate-200 dark:hover:bg-slate-800 cursor-grab active:cursor-grabbing touch-none transition-colors"
-          >
-            <GripVertical className="h-4 w-4" />
-          </button>
-          <div className="min-w-0">
-            <h3 className="text-base font-semibold tracking-tight text-slate-900 dark:text-white truncate">
-              {widget.title}
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-              {widget.subtitle}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            disabled={index === 0}
-            onClick={() => onMove(widget.id, 'up')}
-            aria-label={`Move ${widget.title} up`}
-            title="Move widget up"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-200/60 dark:hover:text-slate-200 dark:hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-          >
-            <ArrowUp className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            disabled={index === totalVisible - 1}
-            onClick={() => onMove(widget.id, 'down')}
-            aria-label={`Move ${widget.title} down`}
-            title="Move widget down"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-200/60 dark:hover:text-slate-200 dark:hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-          >
-            <ArrowDown className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-
-      <div className="p-5 sm:p-6">{children}</div>
-    </Reorder.Item>
-  );
-};
-
 export default function App() {
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => loadSavedTheme());
-  const [activeTab, setActiveTab] = useState<PrimaryTab>('full-names-emails');
-  const [sessionMode, setSessionMode] = useState<SessionMode>('domain');
-  const [showWidgetsDrawer, setShowWidgetsDrawer] = useState(false);
+  const initialRoute = useMemo<UrlRoutedState>(() => {
+    if (typeof window === 'undefined') {
+      return {
+        sessionMode: 'domain',
+        activeTab: 'full-names-emails',
+        activeDomain: null,
+        filters: INITIAL_SIDEBAR_FILTERS,
+        globalPage: 1,
+        contactsPage: 1,
+        rolesPage: 1,
+        localSearchQuery: '',
+        selectedDepartment: 'All',
+        selectedSeniority: 'All',
+        filterSelectedCompany: null,
+        showWidgetsDrawer: false,
+      };
+    }
+    return parseUrlToAppState(window.location, INITIAL_SIDEBAR_FILTERS);
+  }, []);
 
-  // Responsive Sidebar state (collapsible on PC, slide-over drawer on mobile)
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => loadSavedTheme());
+  const [activeTab, setActiveTab] = useState<PrimaryTab>(initialRoute.activeTab);
+  const [sessionMode, setSessionMode] = useState<SessionMode>(
+    initialRoute.sessionMode
+  );
+  const [showWidgetsDrawer, setShowWidgetsDrawer] = useState<boolean>(
+    initialRoute.showWidgetsDrawer
+  );
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [filters, setFilters] = useState<SidebarFiltersState>(
-    INITIAL_SIDEBAR_FILTERS
+    initialRoute.filters
   );
 
-  // Global Industries Catalog + Filter Explorer Session state
+  const [globalPage, setGlobalPage] = useState<number>(initialRoute.globalPage);
+  const [contactsPage, setContactsPage] = useState<number>(
+    initialRoute.contactsPage
+  );
+  const [rolesPage, setRolesPage] = useState<number>(initialRoute.rolesPage);
+  const [localSearchQuery, setLocalSearchQuery] = useState<string>(
+    initialRoute.localSearchQuery
+  );
+
   const [globalIndustries, setGlobalIndustries] = useState<
     GlobalIndustryOption[]
   >([]);
@@ -192,11 +117,9 @@ export default function App() {
   const [filterExplorerResult, setFilterExplorerResult] =
     useState<FilterExplorerResponse | null>(null);
   const [isFilterLoading, setIsFilterLoading] = useState(false);
-  const [globalPage, setGlobalPage] = useState(1);
 
-  // Selected Company drilldown inside Filter Explorer (stays inside Filter Explorer!)
   const [filterSelectedCompany, setFilterSelectedCompany] =
-    useState<GlobalCompanyItem | null>(null);
+    useState<GlobalCompanyItem | null>(initialRoute.filterSelectedCompany);
   const [filterCompanyResult, setFilterCompanyResult] =
     useState<SearchResponse | null>(null);
   const [isFilterCompanyLoading, setIsFilterCompanyLoading] = useState(false);
@@ -205,53 +128,86 @@ export default function App() {
   );
   const filterCompanyAbortRef = useRef<AbortController | null>(null);
 
-  // Domain Lookup Session state — completely empty on boot (zero autofill!)
-  const [domainInput, setDomainInput] = useState('');
-  const [snapshots, setSnapshots] = useState<Record<string, SearchResponse>>(() =>
-    loadSnapshots()
+  const [domainInput, setDomainInput] = useState<string>(
+    initialRoute.activeDomain || ''
   );
-  const [activeDomain, setActiveDomain] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<Record<string, SearchResponse>>(
+    () => loadSnapshots()
+  );
+  const [activeDomain, setActiveDomain] = useState<string | null>(
+    initialRoute.activeDomain
+  );
 
   const [isDomainLoading, setIsDomainLoading] = useState(false);
   const [loadingDomain, setLoadingDomain] = useState('');
-  const [statusBanner, setStatusBanner] = useState<{
-    tone: 'info' | 'warning' | 'error' | 'success';
-    text: string;
-  } | null>(null);
+  const [statusBanner, setStatusBanner] = useState<StatusBannerState | null>(
+    null
+  );
 
-  // Separate hierarchy drilldowns per session so Domain Lookup and Filter Explorer never interfere
   const [domainSelectedDepartment, setDomainSelectedDepartment] = useState<
     DepartmentCategory | 'All'
-  >('All');
+  >(
+    initialRoute.sessionMode === 'domain'
+      ? initialRoute.selectedDepartment
+      : 'All'
+  );
   const [domainSelectedSeniority, setDomainSelectedSeniority] = useState<
     SeniorityLevel | 'All'
-  >('All');
+  >(
+    initialRoute.sessionMode === 'domain'
+      ? initialRoute.selectedSeniority
+      : 'All'
+  );
   const [filterSelectedDepartment, setFilterSelectedDepartment] = useState<
     DepartmentCategory | 'All'
-  >('All');
+  >(
+    initialRoute.sessionMode === 'filter'
+      ? initialRoute.selectedDepartment
+      : 'All'
+  );
   const [filterSelectedSeniority, setFilterSelectedSeniority] = useState<
     SeniorityLevel | 'All'
-  >('All');
+  >(
+    initialRoute.sessionMode === 'filter'
+      ? initialRoute.selectedSeniority
+      : 'All'
+  );
 
   const [widgets, setWidgets] = useState<WidgetConfig[]>(() =>
     loadWidgetConfigs()
   );
 
-  const [browserOnline, setBrowserOnline] = useState<boolean>(() =>
-    typeof navigator !== 'undefined' ? navigator.onLine : true
-  );
-  const [simulateOffline, setSimulateOffline] = useState(false);
-  const effectiveOffline = !browserOnline || simulateOffline;
-
-  const [syncQueue, setSyncQueue] = useState<SyncQueueItem[]>(() =>
-    loadSyncQueue()
-  );
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-
   const searchInputRef = useRef<HTMLInputElement>(null);
   const resultsTopRef = useRef<HTMLDivElement>(null);
   const { isInstallable, install } = usePWAInstall();
+
+  const handleSyncedResults = useCallback((results: SearchResponse[]) => {
+    setSnapshots((prev) => {
+      const next = { ...prev };
+      for (const r of results) {
+        next[r.domain] = r;
+      }
+      return next;
+    });
+  }, []);
+
+  const {
+    effectiveOffline,
+    simulateOffline,
+    setSimulateOffline,
+    syncQueue,
+    setSyncQueue,
+    isSyncing,
+    lastSyncedAt,
+    pendingSyncCount,
+    queueDomainOffline,
+    syncPendingQueue,
+  } = useOfflineSyncQueue({
+    onSyncedResults: handleSyncedResults,
+    setActiveDomain,
+    setSessionMode,
+    setStatusBanner,
+  });
 
   useEffect(() => {
     const root = document.documentElement;
@@ -268,25 +224,9 @@ export default function App() {
   }, [snapshots]);
 
   useEffect(() => {
-    saveSyncQueue(syncQueue);
-  }, [syncQueue]);
-
-  useEffect(() => {
     saveWidgetConfigs(widgets);
   }, [widgets]);
 
-  useEffect(() => {
-    const onOnline = () => setBrowserOnline(true);
-    const onOffline = () => setBrowserOnline(false);
-    window.addEventListener('online', onOnline);
-    window.addEventListener('offline', onOffline);
-    return () => {
-      window.removeEventListener('online', onOnline);
-      window.removeEventListener('offline', onOffline);
-    };
-  }, []);
-
-  // Load all 277 global industries on mount
   useEffect(() => {
     if (effectiveOffline) return;
     let cancelled = false;
@@ -314,16 +254,15 @@ export default function App() {
     [filters]
   );
 
-  // Debounce text & slider inputs so rapid typing/sliding auto-loads smoothly without race conditions
-  const [debouncedTextFilters, setDebouncedTextFilters] = useState({
-    companyNameFilter: '',
-    industryKeyword: '',
-    locationQuery: '',
-    contactSearch: '',
-    roleKeyword: '',
-    minAccuracy: 50,
-    maxAccuracy: 99,
-  });
+  const [debouncedTextFilters, setDebouncedTextFilters] = useState(() => ({
+    companyNameFilter: initialRoute.filters.companyNameFilter.trim(),
+    industryKeyword: initialRoute.filters.industryKeyword.trim(),
+    locationQuery: initialRoute.filters.locationQuery.trim(),
+    contactSearch: initialRoute.filters.contactSearch.trim(),
+    roleKeyword: initialRoute.filters.roleKeyword.trim(),
+    minAccuracy: initialRoute.filters.minAccuracy,
+    maxAccuracy: initialRoute.filters.maxAccuracy,
+  }));
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -356,7 +295,6 @@ export default function App() {
   const selectedEmpRangesKey = filters.employeeRanges.join('|');
   const selectedRevRangesKey = filters.revenueRanges.join('|');
 
-  // Auto-load Filter Explorer Session whenever filters change OR Filter Explorer Session is active
   useEffect(() => {
     if (effectiveOffline) return;
     if (sessionMode !== 'filter' && activeFilterCount === 0) {
@@ -411,13 +349,17 @@ export default function App() {
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((payload: FilterExplorerResponse | null) => {
-        if (!controller.signal.aborted && payload && Array.isArray(payload.employees)) {
+        if (
+          !controller.signal.aborted &&
+          payload &&
+          Array.isArray(payload.employees)
+        ) {
           setFilterExplorerResult(payload);
           setGlobalDirectory({
             industrySlug: selectedSlugsKey || 'all',
             industryFullTitle: payload.scopeTitle,
             page: payload.page,
-            perPage: 25,
+            perPage: 500,
             totalCompanies: payload.totalMatchedCompanies,
             totalPages: payload.totalPages,
             companies: payload.companies,
@@ -454,7 +396,6 @@ export default function App() {
     effectiveOffline,
   ]);
 
-  // Any filter modification automatically switches into Filter Explorer Session & resets page to 1
   const handleChangeFilters = useCallback(
     (updater: (prev: SidebarFiltersState) => SidebarFiltersState) => {
       setFilters(updater);
@@ -472,6 +413,8 @@ export default function App() {
       setFilterSelectedDepartment('All');
       setFilterSelectedSeniority('All');
       setGlobalPage(1);
+      setContactsPage(1);
+      setRolesPage(1);
     },
     []
   );
@@ -481,7 +424,6 @@ export default function App() {
     return snapshots[activeDomain] || null;
   }, [activeDomain, snapshots]);
 
-  // Exact live filtered contacts in Filter Explorer Session (for badges & top Copy Full Name List button)
   const activeFilteredContacts = useMemo(() => {
     if (!filterExplorerResult) return [];
     const qContact = filters.contactSearch.trim().toLowerCase();
@@ -564,13 +506,14 @@ export default function App() {
     );
   }, [filterExplorerResult, activeFilteredContacts.length]);
 
-  // Synthesize AnalyticsWidget view for whichever session is active
   const activeAnalyticsResult = useMemo<SearchResponse | null>(() => {
     if (sessionMode === 'domain') return currentDomainResult;
     if (filterSelectedCompany && filterCompanyResult) {
       return filterCompanyResult;
     }
-    if (!filterExplorerResult || activeFilteredContacts.length === 0) return null;
+    if (!filterExplorerResult || activeFilteredContacts.length === 0) {
+      return null;
+    }
     return {
       domain: 'filter-explorer',
       companyName: filterExplorerResult.scopeTitle,
@@ -583,12 +526,12 @@ export default function App() {
           filters.emailFormulaOverride === 'auto'
             ? 'first_dot_last'
             : filters.emailFormulaOverride,
-        formulaLabel: 'Multi-Company Corporate Format',
+        formulaLabel: 'Unique Auto-Detected Per Company',
         excelFormula: '',
         patternConfidence: 88,
         mxVerified: true,
         mxProvider: 'Multi-Domain Verified',
-        detectionBasis: 'Filter Explorer Cohort',
+        detectionBasis: 'Live Web Pattern Intelligence',
         sampleObservedEmails: [],
       },
       sourcesUsed: ['Org Chart'],
@@ -609,26 +552,6 @@ export default function App() {
     filters.emailFormulaOverride,
   ]);
 
-  const queueDomainOffline = useCallback((domain: string) => {
-    setSyncQueue((prev) => {
-      const exists = prev.find(
-        (item) =>
-          item.domain === domain &&
-          (item.status === 'pending' || item.status === 'syncing')
-      );
-      if (exists) return prev;
-      return [
-        {
-          id: `${domain}-${Date.now()}`,
-          domain,
-          queuedAt: new Date().toISOString(),
-          status: 'pending',
-        },
-        ...prev,
-      ];
-    });
-  }, []);
-
   const executeDomainLookup = useCallback(
     async (
       rawDomain: string,
@@ -645,13 +568,15 @@ export default function App() {
         return;
       }
 
-      // Activate Domain Lookup Session exclusively (preserving Filter Explorer Session state separately!)
       setSessionMode('domain');
       if (domain) {
         setDomainInput(domain);
       }
       setDomainSelectedDepartment('All');
       setDomainSelectedSeniority('All');
+      setContactsPage(1);
+      setRolesPage(1);
+      setLocalSearchQuery('');
 
       const existingSnapshot = domain ? snapshots[domain] : undefined;
       const hasValidSnapshot =
@@ -703,7 +628,9 @@ export default function App() {
         const payload = await res.json();
 
         if (!res.ok) {
-          throw new Error(payload?.error || 'Failed to query public directory.');
+          throw new Error(
+            payload?.error || 'Failed to query public directory.'
+          );
         }
 
         const data = payload as SearchResponse;
@@ -750,147 +677,16 @@ export default function App() {
     [effectiveOffline, queueDomainOffline, snapshots]
   );
 
-  const syncPendingQueue = useCallback(async () => {
-    if (effectiveOffline || isSyncing) return;
-    const pendingItems = syncQueue.filter(
-      (item) => item.status === 'pending' || item.status === 'failed'
-    );
-    if (pendingItems.length === 0) return;
-
-    setIsSyncing(true);
-    const domainsToSync = Array.from(new Set(pendingItems.map((i) => i.domain)));
-
-    setSyncQueue((prev) =>
-      prev.map((item) =>
-        domainsToSync.includes(item.domain) && item.status !== 'synced'
-          ? { ...item, status: 'syncing', errorMessage: undefined }
-          : item
-      )
-    );
-
-    try {
-      const res = await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domains: domainsToSync }),
-      });
-
-      if (!res.ok) {
-        throw new Error('Batch sync endpoint returned an error.');
-      }
-
-      const payload: {
-        syncedAt: string;
-        results: SearchResponse[];
-        errors: Record<string, string>;
-      } = await res.json();
-
-      const nonEmptyResults = payload.results.filter(
-        (r) => r.employees.length > 0
-      );
-
-      if (nonEmptyResults.length > 0) {
-        setSnapshots((prev) => {
-          const next = { ...prev };
-          for (const r of nonEmptyResults) {
-            next[r.domain] = r;
-          }
-          return next;
-        });
-        setActiveDomain(nonEmptyResults[0].domain);
-        setSessionMode('domain');
-      }
-
-      const syncedDomains = new Set(payload.results.map((r) => r.domain));
-      setSyncQueue((prev) =>
-        prev.map((item) => {
-          if (syncedDomains.has(item.domain)) {
-            return { ...item, status: 'synced', errorMessage: undefined };
-          }
-          if (payload.errors[item.domain]) {
-            return {
-              ...item,
-              status: 'failed',
-              errorMessage: payload.errors[item.domain],
-            };
-          }
-          return item;
-        })
-      );
-
-      setLastSyncedAt(payload.syncedAt);
-      setStatusBanner({
-        tone: 'success',
-        text: `Synced ${payload.results.length} domain${
-          payload.results.length === 1 ? '' : 's'
-        } with ranked employees and corporate email addresses.`,
-      });
-    } catch (err) {
-      setSyncQueue((prev) =>
-        prev.map((item) =>
-          item.status === 'syncing'
-            ? {
-                ...item,
-                status: 'failed',
-                errorMessage:
-                  err instanceof Error ? err.message : 'Sync failed',
-              }
-            : item
-        )
-      );
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [effectiveOffline, isSyncing, syncQueue]);
-
-  useEffect(() => {
-    if (!effectiveOffline) {
-      const hasPending = syncQueue.some((i) => i.status === 'pending');
-      if (hasPending) {
-        void syncPendingQueue();
-      }
-    }
-  }, [effectiveOffline, syncPendingQueue, syncQueue]);
-
-  // Sidebar Industry Filter Selection -> Switches to Filter Explorer Session and auto-loads!
-  const handleSelectIndustryFilter = useCallback((nextSlugs: string[]) => {
-    setFilters((prev) => ({
-      ...prev,
-      selectedIndustrySlugs: nextSlugs,
-    }));
-    filterCompanyAbortRef.current?.abort();
-    setIsFilterCompanyLoading(false);
-    setFilterSelectedCompany(null);
-    setFilterCompanyResult(null);
-    setFilterCompanyError(null);
-    setSessionMode((prevMode) => {
-      if (prevMode !== 'filter') {
-        setActiveTab('industry');
-      }
-      return 'filter';
-    });
-    setFilterSelectedDepartment('All');
-    setFilterSelectedSeniority('All');
-    setGlobalPage(1);
-  }, []);
-
-  const handleBackToCompaniesList = useCallback(() => {
-    filterCompanyAbortRef.current?.abort();
-    setIsFilterCompanyLoading(false);
-    setFilterSelectedCompany(null);
-    setFilterCompanyResult(null);
-    setFilterCompanyError(null);
-    setSessionMode('filter');
-    setActiveTab('industry');
-    scrollToListTop(resultsTopRef.current);
-  }, []);
-
-  // Clicking a company in Filter Explorer -> Views the whole Full Names & Emails right under Filter Explorer!
-  const handleSelectGlobalCompany = useCallback(
-    async (company: GlobalCompanyItem) => {
+  const loadFilterCompanyContacts = useCallback(
+    async (company: GlobalCompanyItem, preserveCurrentTab = false) => {
       filterCompanyAbortRef.current?.abort();
       setSessionMode('filter');
-      setActiveTab('full-names-emails');
+      if (!preserveCurrentTab) {
+        setActiveTab('full-names-emails');
+        setContactsPage(1);
+        setRolesPage(1);
+        setLocalSearchQuery('');
+      }
       setFilterSelectedDepartment('All');
       setFilterSelectedSeniority('All');
       setFilterSelectedCompany(company);
@@ -978,7 +774,168 @@ export default function App() {
     [effectiveOffline, queueDomainOffline, snapshots]
   );
 
-  // Uploading a list of domains from Sidebar -> Opens in Domain Lookup Session
+  const handleSelectGlobalCompany = useCallback(
+    (company: GlobalCompanyItem) => {
+      void loadFilterCompanyContacts(company, false);
+    },
+    [loadFilterCompanyContacts]
+  );
+
+  const hydratedDeepLinkRef = useRef<string>('');
+  useEffect(() => {
+    if (
+      sessionMode === 'domain' &&
+      activeDomain &&
+      !snapshots[activeDomain] &&
+      !isDomainLoading
+    ) {
+      const key = `domain:${activeDomain}`;
+      if (hydratedDeepLinkRef.current !== key) {
+        hydratedDeepLinkRef.current = key;
+        void executeDomainLookup(activeDomain, false);
+      }
+    } else if (
+      sessionMode === 'filter' &&
+      filterSelectedCompany &&
+      !filterCompanyResult &&
+      !isFilterCompanyLoading
+    ) {
+      const key = `company:${filterSelectedCompany.slug}:${
+        filterSelectedCompany.domain || ''
+      }`;
+      if (hydratedDeepLinkRef.current !== key) {
+        hydratedDeepLinkRef.current = key;
+        void loadFilterCompanyContacts(filterSelectedCompany, true);
+      }
+    }
+  }, [
+    sessionMode,
+    activeDomain,
+    snapshots,
+    isDomainLoading,
+    executeDomainLookup,
+    filterSelectedCompany,
+    filterCompanyResult,
+    isFilterCompanyLoading,
+    loadFilterCompanyContacts,
+  ]);
+
+  const activeSelectedDepartment =
+    sessionMode === 'domain'
+      ? domainSelectedDepartment
+      : filterSelectedDepartment;
+  const activeSelectedSeniority =
+    sessionMode === 'domain'
+      ? domainSelectedSeniority
+      : filterSelectedSeniority;
+
+  const handleBackToCompaniesList = useCallback(() => {
+    filterCompanyAbortRef.current?.abort();
+    setIsFilterCompanyLoading(false);
+    setFilterSelectedCompany(null);
+    setFilterCompanyResult(null);
+    setFilterCompanyError(null);
+    setSessionMode('filter');
+    setActiveTab('industry');
+    setContactsPage(1);
+    setRolesPage(1);
+    setLocalSearchQuery('');
+    scrollToListTop(resultsTopRef.current);
+  }, []);
+
+  const currentUrlState = useMemo<UrlRoutedState>(
+    () => ({
+      sessionMode,
+      activeTab,
+      activeDomain,
+      filters,
+      globalPage,
+      contactsPage,
+      rolesPage,
+      localSearchQuery,
+      selectedDepartment: activeSelectedDepartment,
+      selectedSeniority: activeSelectedSeniority,
+      filterSelectedCompany,
+      showWidgetsDrawer,
+    }),
+    [
+      sessionMode,
+      activeTab,
+      activeDomain,
+      filters,
+      globalPage,
+      contactsPage,
+      rolesPage,
+      localSearchQuery,
+      activeSelectedDepartment,
+      activeSelectedSeniority,
+      filterSelectedCompany,
+      showWidgetsDrawer,
+    ]
+  );
+
+  const { currentRoutePath, breadcrumbs } = useUrlRouterSync({
+    state: currentUrlState,
+    defaultFilters: INITIAL_SIDEBAR_FILTERS,
+    domainCompanyName: currentDomainResult?.companyName,
+    filterCompanyDisplayName: filterCompanyResult?.companyName,
+    onRestorePopState: (parsed) => {
+      setSessionMode(parsed.sessionMode);
+      setActiveTab(parsed.activeTab);
+      setActiveDomain(parsed.activeDomain);
+      setDomainInput(parsed.activeDomain || '');
+      setFilters(parsed.filters);
+      setGlobalPage(parsed.globalPage);
+      setContactsPage(parsed.contactsPage);
+      setRolesPage(parsed.rolesPage);
+      setLocalSearchQuery(parsed.localSearchQuery);
+      setShowWidgetsDrawer(parsed.showWidgetsDrawer);
+      if (parsed.sessionMode === 'domain') {
+        setDomainSelectedDepartment(parsed.selectedDepartment);
+        setDomainSelectedSeniority(parsed.selectedSeniority);
+      } else {
+        setFilterSelectedDepartment(parsed.selectedDepartment);
+        setFilterSelectedSeniority(parsed.selectedSeniority);
+      }
+      if (!parsed.filterSelectedCompany) {
+        setFilterSelectedCompany(null);
+        setFilterCompanyResult(null);
+        setFilterCompanyError(null);
+      } else {
+        setFilterSelectedCompany(parsed.filterSelectedCompany);
+      }
+    },
+    onNavigateDomainRoot: () => {
+      setSessionMode('domain');
+      setActiveTab('full-names-emails');
+    },
+    onNavigateTabFullNames: () => setActiveTab('full-names-emails'),
+    onBackToCompaniesList: handleBackToCompaniesList,
+  });
+
+  const handleSelectIndustryFilter = useCallback((nextSlugs: string[]) => {
+    setFilters((prev) => ({
+      ...prev,
+      selectedIndustrySlugs: nextSlugs,
+    }));
+    filterCompanyAbortRef.current?.abort();
+    setIsFilterCompanyLoading(false);
+    setFilterSelectedCompany(null);
+    setFilterCompanyResult(null);
+    setFilterCompanyError(null);
+    setSessionMode((prevMode) => {
+      if (prevMode !== 'filter') {
+        setActiveTab('industry');
+      }
+      return 'filter';
+    });
+    setFilterSelectedDepartment('All');
+    setFilterSelectedSeniority('All');
+    setGlobalPage(1);
+    setContactsPage(1);
+    setRolesPage(1);
+  }, []);
+
   const handleBulkDomainsUpload = useCallback(
     (domains: string[]) => {
       if (domains.length === 0) return;
@@ -1034,19 +991,6 @@ export default function App() {
     );
   };
 
-  const pendingSyncCount = syncQueue.filter(
-    (q) => q.status === 'pending' || q.status === 'failed'
-  ).length;
-
-  const activeSelectedDepartment =
-    sessionMode === 'domain'
-      ? domainSelectedDepartment
-      : filterSelectedDepartment;
-  const activeSelectedSeniority =
-    sessionMode === 'domain'
-      ? domainSelectedSeniority
-      : filterSelectedSeniority;
-
   const handleSelectActiveDepartment = useCallback(
     (dept: DepartmentCategory | 'All') => {
       if (sessionMode === 'domain') {
@@ -1054,6 +998,7 @@ export default function App() {
       } else {
         setFilterSelectedDepartment(dept);
       }
+      setRolesPage(1);
     },
     [sessionMode]
   );
@@ -1065,12 +1010,13 @@ export default function App() {
       } else {
         setFilterSelectedSeniority(sen);
       }
+      setRolesPage(1);
     },
     [sessionMode]
   );
 
-  const fullNamesTab = {
-    id: 'full-names-emails' as PrimaryTab,
+  const fullNamesTab: PrimaryTabConfig = {
+    id: 'full-names-emails',
     label: 'Full Names & Emails',
     icon: Users,
     badge:
@@ -1087,8 +1033,8 @@ export default function App() {
         : undefined,
   };
 
-  const commandHierarchyTab = {
-    id: 'command-hierarchy' as PrimaryTab,
+  const commandHierarchyTab: PrimaryTabConfig = {
+    id: 'command-hierarchy',
     label: 'Command Hierarchy',
     icon: Crown,
     badge:
@@ -1105,8 +1051,8 @@ export default function App() {
         : undefined,
   };
 
-  const industryTab = {
-    id: 'industry' as PrimaryTab,
+  const industryTab: PrimaryTabConfig = {
+    id: 'industry',
     label: sessionMode === 'filter' ? 'Companies' : 'Industry',
     icon: Building2,
     badge:
@@ -1119,20 +1065,25 @@ export default function App() {
         : undefined,
   };
 
-  // Under Filter Explorer: Companies tab is on the LEFT!
-  const primaryTabs: Array<{
-    id: PrimaryTab;
-    label: string;
-    icon: React.FC<{ className?: string }>;
-    badge?: string;
-  }> =
+  const primaryTabs: PrimaryTabConfig[] =
     sessionMode === 'filter'
       ? [industryTab, fullNamesTab, commandHierarchyTab]
       : [fullNamesTab, commandHierarchyTab, industryTab];
 
+  const handleSelectPrimaryTab = useCallback(
+    (tabId: PrimaryTab) => {
+      if (sessionMode === 'filter' && tabId === 'industry') {
+        handleBackToCompaniesList();
+        return;
+      }
+      setActiveTab(tabId);
+      setLocalSearchQuery('');
+    },
+    [sessionMode, handleBackToCompaniesList]
+  );
+
   return (
     <div className="min-h-screen relative overflow-x-clip bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 transition-colors duration-200">
-      {/* Subtle Glass Ambient Backdrop */}
       <div
         aria-hidden="true"
         className="pointer-events-none fixed inset-0 overflow-hidden z-0"
@@ -1141,108 +1092,39 @@ export default function App() {
         <div className="absolute top-72 -right-32 h-[360px] w-[520px] rounded-full bg-indigo-500/10 dark:bg-indigo-500/8 blur-3xl" />
       </div>
 
-      {/* Strict 3-Zone Top Bar Contract */}
-      <header className="sticky top-0 z-30 backdrop-blur-xl bg-white/75 dark:bg-[#090d16]/75 border-b border-slate-200/80 dark:border-slate-800/80">
-        <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-8 px-4 sm:px-6 lg:px-8 h-16">
-          {/* Zone 1: Brand Wordmark */}
-          <a
-            href="#top"
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveTab('full-names-emails');
-            }}
-            className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
-          >
-            OrgLens
-          </a>
+      <TopNavHeader
+        sessionMode={sessionMode}
+        activeTab={activeTab}
+        primaryTabs={primaryTabs}
+        showWidgetsDrawer={showWidgetsDrawer}
+        totalMatchedCompanies={filterExplorerResult?.totalMatchedCompanies}
+        onBrandClick={() => {
+          setSessionMode('domain');
+          setActiveTab('full-names-emails');
+        }}
+        onSelectTab={handleSelectPrimaryTab}
+        onToggleWidgetsDrawer={() => setShowWidgetsDrawer((v) => !v)}
+        onOpenWorldwideExplorer={() => {
+          if (!filterSelectedCompany) {
+            setActiveTab('industry');
+          }
+          setSessionMode('filter');
+          scrollToListTop(resultsTopRef.current);
+        }}
+        onFocusDomainLookup={() => {
+          setSessionMode('domain');
+          setActiveTab('full-names-emails');
+          scrollToListTop(searchInputRef.current, 110);
+          window.setTimeout(() => {
+            searchInputRef.current?.focus();
+          }, 120);
+        }}
+      />
 
-          {/* Zone 2: Clean Single-Line Nav Links */}
-          <nav
-            aria-label="Primary tabs"
-            className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600 dark:text-slate-300"
-          >
-            {primaryTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => {
-                  if (sessionMode === 'filter' && tab.id === 'industry') {
-                    handleBackToCompaniesList();
-                    return;
-                  }
-                  setActiveTab(tab.id);
-                }}
-                className={`underline-offset-4 hover:underline transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  activeTab === tab.id
-                    ? 'text-slate-900 dark:text-white font-semibold underline'
-                    : 'hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setShowWidgetsDrawer((v) => !v)}
-              className={`underline-offset-4 hover:underline transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                showWidgetsDrawer
-                  ? 'text-slate-900 dark:text-white font-semibold underline'
-                  : 'hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              Widgets &amp; Sync
-            </button>
-          </nav>
-
-          {/* Zone 3: Single Contextual Primary Action -> Worldwide Explorer / Lookup Domain */}
-          <div className="flex items-center shrink-0">
-            {sessionMode === 'domain' ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!filterSelectedCompany) {
-                    setActiveTab('industry');
-                  }
-                  setSessionMode('filter');
-                  scrollToListTop(resultsTopRef.current);
-                }}
-                className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 text-xs font-semibold rounded-lg bg-sky-600 hover:bg-sky-500 text-white shadow-xs transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Globe className="h-3.5 w-3.5" />
-                <span>
-                  Worldwide Explorer
-                  {filterExplorerResult
-                    ? ` (${filterExplorerResult.totalMatchedCompanies.toLocaleString()} Orgs)`
-                    : ''}
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setSessionMode('domain');
-                  setActiveTab('full-names-emails');
-                  scrollToListTop(searchInputRef.current, 110);
-                  window.setTimeout(() => {
-                    searchInputRef.current?.focus();
-                  }, 120);
-                }}
-                className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 text-xs font-semibold rounded-lg bg-sky-600 hover:bg-sky-500 text-white shadow-xs transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Search className="h-3.5 w-3.5" />
-                <span>Lookup Domain</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* Main Responsive Workspace: Collapsible Left Sidebar + Fluid Directory Viewport */}
       <div
         id="top"
         className="relative z-10 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 flex items-start gap-6"
       >
-        {/* Left Collapsible Filter Sidebar (PC) & Slide-Over Drawer (Mobile) */}
         <FilterSidebar
           filters={filters}
           onChangeFilters={handleChangeFilters}
@@ -1256,6 +1138,9 @@ export default function App() {
             setFilterSelectedDepartment('All');
             setFilterSelectedSeniority('All');
             setGlobalPage(1);
+            setContactsPage(1);
+            setRolesPage(1);
+            setLocalSearchQuery('');
             setSessionMode('filter');
             setActiveTab('industry');
           }}
@@ -1284,6 +1169,9 @@ export default function App() {
             setDomainInput(d);
             setDomainSelectedDepartment('All');
             setDomainSelectedSeniority('All');
+            setContactsPage(1);
+            setRolesPage(1);
+            setLocalSearchQuery('');
             setActiveTab('full-names-emails');
           }}
           collapsed={sidebarCollapsed}
@@ -1293,287 +1181,69 @@ export default function App() {
           isFilterLoading={isFilterLoading}
         />
 
-        {/* Main Content Viewport */}
-        <main className="flex-1 min-w-0 space-y-5">
-          {/* Domain Search & Utility Controls */}
-          <section className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/70 border border-slate-200/85 dark:border-slate-800/85 p-4 sm:p-7 shadow-xs">
-            <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
-              <div className="max-w-2xl min-w-0">
-                <h1
-                  style={{ textWrap: 'balance' }}
-                  className="font-display text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-slate-900 dark:text-white"
-                >
-                  Corporate email finder &amp; Worldwide company explorer
-                </h1>
-              </div>
+        <main className="flex-1 min-w-0 space-y-4">
+          <RouteAddressBar
+            breadcrumbs={breadcrumbs}
+            currentRoutePath={currentRoutePath}
+          />
 
-              {/* Mobile Filter Trigger + Utility Controls */}
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <MobileFilterTriggerButton
-                  activeCount={activeFilterCount}
-                  onClick={() => setMobileSidebarOpen(true)}
-                />
+          <HeroDomainSearchSection
+            searchInputRef={searchInputRef}
+            domainInput={domainInput}
+            onChangeDomainInput={setDomainInput}
+            onSubmitDomain={handleSubmit}
+            isDomainLoading={isDomainLoading}
+            sessionMode={sessionMode}
+            currentDomainResult={currentDomainResult}
+            onRefreshCurrentDomain={(d) => void executeDomainLookup(d, true)}
+            activeFilterCount={activeFilterCount}
+            onOpenMobileFilters={() => setMobileSidebarOpen(true)}
+            showWidgetsDrawer={showWidgetsDrawer}
+            onToggleWidgetsDrawer={() => setShowWidgetsDrawer((v) => !v)}
+            effectiveOffline={effectiveOffline}
+            pendingSyncCount={pendingSyncCount}
+            onToggleSimulateOffline={() => setSimulateOffline((prev) => !prev)}
+            theme={theme}
+            onToggleTheme={() =>
+              setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
+            }
+            isInstallable={isInstallable}
+            onInstallApp={() => void install()}
+            statusBanner={statusBanner}
+            onDismissStatusBanner={() => setStatusBanner(null)}
+          />
 
-                <button
-                  type="button"
-                  onClick={() => setShowWidgetsDrawer((v) => !v)}
-                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 ${
-                    showWidgetsDrawer
-                      ? 'border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300'
-                      : 'border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <LayoutGrid className="h-3.5 w-3.5" />
-                  Saved &amp; Widgets
-                </button>
+          <SessionAndTabsBar
+            resultsTopRef={resultsTopRef}
+            sessionMode={sessionMode}
+            activeTab={activeTab}
+            primaryTabs={primaryTabs}
+            currentDomainResult={currentDomainResult}
+            filterExplorerResult={filterExplorerResult}
+            activeTotalMatchedContacts={activeTotalMatchedContacts}
+            activeFilterCount={activeFilterCount}
+            isFilterLoading={isFilterLoading}
+            isFilterCompanyLoading={isFilterCompanyLoading}
+            onSelectDomainSession={() => {
+              setSessionMode('domain');
+              setLocalSearchQuery('');
+            }}
+            onSelectFilterSession={() => {
+              if (sessionMode !== 'filter' && !filterSelectedCompany) {
+                setActiveTab('industry');
+              }
+              setSessionMode('filter');
+              setLocalSearchQuery('');
+            }}
+            onSelectTab={handleSelectPrimaryTab}
+          />
 
-                <button
-                  type="button"
-                  onClick={() => setSimulateOffline((prev) => !prev)}
-                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 ${
-                    effectiveOffline
-                      ? 'border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-200'
-                      : 'border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <CloudOff className="h-3.5 w-3.5" />
-                  {effectiveOffline
-                    ? `Offline${pendingSyncCount > 0 ? ` (${pendingSyncCount})` : ''}`
-                    : 'Test Offline'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
-                  }
-                  aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  {theme === 'dark' ? (
-                    <>
-                      <Sun className="h-3.5 w-3.5 text-amber-400" />
-                      Light
-                    </>
-                  ) : (
-                    <>
-                      <Moon className="h-3.5 w-3.5 text-slate-700" />
-                      Dark
-                    </>
-                  )}
-                </button>
-
-                {isInstallable && (
-                  <button
-                    type="button"
-                    onClick={() => void install()}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    <Smartphone className="h-3.5 w-3.5" />
-                    Install App
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Domain Search Form (Starts completely empty — dedicated to Domain Lookup Session) */}
-            <form onSubmit={handleSubmit} className="mt-4">
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                <div className="relative flex-1 min-w-0">
-                  <Globe className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 dark:text-slate-500" />
-                  <input
-                    ref={searchInputRef}
-                    type="text"
-                    value={domainInput}
-                    onChange={(e) => setDomainInput(e.target.value)}
-                    placeholder="Enter any company domain (e.g., shopify.com, vercel.com)"
-                    aria-label="Company domain name"
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl font-mono text-base sm:text-sm bg-white dark:bg-slate-950/80 border border-slate-300/90 dark:border-slate-800 text-slate-900 dark:text-white placeholder:font-sans placeholder:text-xs placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 transition-colors"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="submit"
-                    disabled={isDomainLoading}
-                    className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-60 shadow-xs transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    {isDomainLoading ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Searching...
-                      </>
-                    ) : effectiveOffline ? (
-                      <>
-                        <CloudOff className="h-4 w-4" />
-                        Queue Lookup
-                      </>
-                    ) : (
-                      <>
-                        <Search className="h-4 w-4" />
-                        Search Domain
-                      </>
-                    )}
-                  </button>
-
-                  {sessionMode === 'domain' &&
-                    currentDomainResult &&
-                    !effectiveOffline && (
-                      <button
-                        type="button"
-                        disabled={isDomainLoading}
-                        onClick={() =>
-                          void executeDomainLookup(
-                            currentDomainResult.domain,
-                            true
-                          )
-                        }
-                        title="Force fresh full-organization & email pattern scrape"
-                        className="px-4 py-2.5 rounded-xl text-sm font-medium border border-slate-200/90 dark:border-slate-800 bg-white/80 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
-                      >
-                        Refresh
-                      </button>
-                    )}
-                </div>
-              </div>
-            </form>
-
-            {/* Status Feedback Banner */}
-            <AnimatePresence mode="wait">
-              {statusBanner && (
-                <motion.div
-                  key={statusBanner.text}
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.16 }}
-                  className={`mt-4 px-4 py-2.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 border ${
-                    statusBanner.tone === 'error'
-                      ? 'border-rose-500/35 bg-rose-500/10 text-rose-800 dark:text-rose-200'
-                      : statusBanner.tone === 'warning'
-                      ? 'border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-                      : statusBanner.tone === 'success'
-                      ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200'
-                      : 'border-sky-500/35 bg-sky-500/10 text-sky-800 dark:text-sky-200'
-                  }`}
-                >
-                  <span>{statusBanner.text}</span>
-                  <button
-                    type="button"
-                    onClick={() => setStatusBanner(null)}
-                    className="text-current opacity-70 hover:opacity-100 underline shrink-0 cursor-pointer"
-                  >
-                    Dismiss
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-
-          {/* Dual-Session Switcher Bar: Domain Lookup vs Filter Explorer */}
-          <div className="flex items-center px-3 py-2.5 rounded-xl backdrop-blur-xl bg-white/75 dark:bg-slate-900/70 border border-slate-200/85 dark:border-slate-800/85">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 w-full p-1 rounded-lg bg-slate-100 dark:bg-slate-950/75 border border-slate-200/80 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => setSessionMode('domain')}
-                className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all duration-150 cursor-pointer whitespace-nowrap ${
-                  sessionMode === 'domain'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Globe className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0" />
-                <span>Domain Lookup</span>
-                <span className="font-mono tabular-nums text-xs text-slate-500 dark:text-slate-400">
-                  {currentDomainResult
-                    ? `· ${currentDomainResult.domain} (${currentDomainResult.employees.length.toLocaleString()})`
-                    : '· Ready'}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (sessionMode !== 'filter' && !filterSelectedCompany) {
-                    setActiveTab('industry');
-                  }
-                  setSessionMode('filter');
-                }}
-                className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all duration-150 cursor-pointer whitespace-nowrap ${
-                  sessionMode === 'filter'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                {isFilterLoading || isFilterCompanyLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
-                ) : (
-                  <SlidersHorizontal className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0" />
-                )}
-                <span>Filter Explorer</span>
-                <span className="font-mono tabular-nums text-xs text-sky-700 dark:text-sky-400">
-                  {filterExplorerResult
-                    ? `· ${activeTotalMatchedContacts.toLocaleString()} Contacts · ${filterExplorerResult.totalMatchedCompanies.toLocaleString()} Orgs`
-                    : activeFilterCount > 0
-                    ? `· ${activeFilterCount} Filters`
-                    : '· Worldwide'}
-                </span>
-              </button>
-            </div>
-          </div>
-
-          {/* Three Primary Result Tabs */}
-          <div
-            ref={resultsTopRef}
-            role="tablist"
-            aria-label="Directory result tabs"
-            className="grid grid-cols-3 gap-1.5 p-1.5 rounded-xl backdrop-blur-xl bg-white/75 dark:bg-slate-900/70 border border-slate-200/85 dark:border-slate-800/85"
-          >
-            {primaryTabs.map((tab) => {
-              const Icon = tab.icon;
-              const active = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  role="tab"
-                  type="button"
-                  aria-selected={active}
-                  onClick={() => {
-                    if (sessionMode === 'filter' && tab.id === 'industry') {
-                      handleBackToCompaniesList();
-                      return;
-                    }
-                    setActiveTab(tab.id);
-                  }}
-                  className={`flex items-center justify-center gap-2 px-2.5 sm:px-4 py-2.5 sm:py-3 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden ${
-                    active
-                      ? 'bg-slate-900 text-white dark:bg-sky-600 dark:text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100/80 dark:hover:bg-slate-800/60'
-                  }`}
-                >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{tab.label}</span>
-                  {tab.badge && (
-                    <span
-                      className={`hidden lg:inline font-mono tabular-nums text-xs truncate max-w-44 ${
-                        active
-                          ? 'text-slate-300 dark:text-sky-100'
-                          : 'text-slate-400 dark:text-slate-500'
-                      }`}
-                    >
-                      · {tab.badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Active Tab Viewport */}
           <AnimatePresence mode="wait">
             {activeTab === 'full-names-emails' && (
               <motion.section
-                key={`tab-full-names-emails-${sessionMode}-${filterSelectedCompany?.slug || 'cohort'}`}
+                key={`tab-full-names-emails-${sessionMode}-${
+                  filterSelectedCompany?.slug || 'cohort'
+                }`}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
@@ -1602,7 +1272,7 @@ export default function App() {
                   filterCompanyError={filterCompanyError}
                   onBackToCompaniesList={handleBackToCompaniesList}
                   onSelectCompanyFromFilterContact={(compInfo) => {
-                    void handleSelectGlobalCompany({
+                    handleSelectGlobalCompany({
                       id: compInfo.slug,
                       slug: compInfo.slug,
                       name: compInfo.name,
@@ -1616,14 +1286,23 @@ export default function App() {
                     });
                   }}
                   globalPage={globalPage}
-                  onChangeGlobalPage={setGlobalPage}
+                  onChangeGlobalPage={(pg) => {
+                    setGlobalPage(pg);
+                    setContactsPage(1);
+                  }}
+                  contactsPage={contactsPage}
+                  onChangeContactsPage={setContactsPage}
+                  urlLocalQuery={localSearchQuery}
+                  onChangeUrlLocalQuery={setLocalSearchQuery}
                 />
               </motion.section>
             )}
 
             {activeTab === 'command-hierarchy' && (
               <motion.section
-                key={`tab-command-hierarchy-${sessionMode}-${filterSelectedCompany?.slug || 'cohort'}`}
+                key={`tab-command-hierarchy-${sessionMode}-${
+                  filterSelectedCompany?.slug || 'cohort'
+                }`}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
@@ -1651,7 +1330,14 @@ export default function App() {
                   isFilterCompanyLoading={isFilterCompanyLoading}
                   onBackToCompaniesList={handleBackToCompaniesList}
                   globalPage={globalPage}
-                  onChangeGlobalPage={setGlobalPage}
+                  onChangeGlobalPage={(pg) => {
+                    setGlobalPage(pg);
+                    setRolesPage(1);
+                  }}
+                  rolesPage={rolesPage}
+                  onChangeRolesPage={setRolesPage}
+                  urlRoleQuery={localSearchQuery}
+                  onChangeUrlRoleQuery={setLocalSearchQuery}
                 />
               </motion.section>
             )}
@@ -1685,12 +1371,17 @@ export default function App() {
                     }));
                     setSessionMode('filter');
                     setGlobalPage(1);
+                    setContactsPage(1);
+                    setRolesPage(1);
                   }}
                   onSelectGlobalCompany={handleSelectGlobalCompany}
                   onSelectDomain={(d) => {
                     setSessionMode('domain');
                     setActiveDomain(d);
                     setDomainInput(d);
+                    setContactsPage(1);
+                    setRolesPage(1);
+                    setLocalSearchQuery('');
                     setActiveTab('full-names-emails');
                   }}
                   onSwitchSessionMode={(mode) => {
@@ -1705,148 +1396,62 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          {/* Collapsible Saved Snapshots, Offline Sync & Draggable Widgets Board */}
-          <AnimatePresence>
-            {showWidgetsDrawer && (
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 8 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-6 pt-2"
-              >
-                <div className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs">
-                  <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                    <div>
-                      <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
-                        Customizable Dashboard Widgets &amp; Offline Sync
-                      </h2>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Drag any widget&apos;s grip handle to reorder, or toggle visibility below.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setWidgets(DEFAULT_WIDGETS)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      Reset Layout
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    {widgets.map((w) => (
-                      <button
-                        key={w.id}
-                        type="button"
-                        onClick={() => toggleWidgetVisibility(w.id)}
-                        className={`flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl text-xs font-medium border transition-all duration-150 cursor-pointer ${
-                          w.visible
-                            ? 'border-sky-500/40 bg-sky-500/10 text-slate-900 dark:text-white'
-                            : 'border-slate-200/80 dark:border-slate-800 text-slate-500 dark:text-slate-400 opacity-75 hover:opacity-100'
-                        }`}
-                      >
-                        <span className="truncate">{w.title}</span>
-                        {w.visible ? (
-                          <Eye className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
-                        ) : (
-                          <EyeOff className="h-3.5 w-3.5 shrink-0" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <Reorder.Group
-                  axis="y"
-                  values={visibleWidgets}
-                  onReorder={handleReorderVisible}
-                  className="space-y-6"
-                >
-                  {visibleWidgets.map((widget, index) => (
-                    <DraggableWidgetCard
-                      key={widget.id}
-                      widget={widget}
-                      index={index}
-                      totalVisible={visibleWidgets.length}
-                      onMove={moveWidgetByStep}
-                    >
-                      {widget.id === 'saved-domains' && (
-                        <SavedDomainsWidget
-                          snapshots={snapshots}
-                          activeDomain={activeDomain}
-                          isOffline={effectiveOffline}
-                          onSelectSnapshot={(d) => {
-                            setSessionMode('domain');
-                            setActiveDomain(d);
-                            setDomainInput(d);
-                            setDomainSelectedDepartment('All');
-                            setDomainSelectedSeniority('All');
-                            setActiveTab('full-names-emails');
-                          }}
-                          onRefreshSnapshot={(d) =>
-                            void executeDomainLookup(d, true)
-                          }
-                          onDeleteSnapshot={(d) => {
-                            setSnapshots((prev) => {
-                              const next = { ...prev };
-                              delete next[d];
-                              return next;
-                            });
-                            if (activeDomain === d) {
-                              setActiveDomain(null);
-                              setDomainInput('');
-                            }
-                          }}
-                        />
-                      )}
-
-                      {widget.id === 'sync-queue' && (
-                        <OfflineSyncWidget
-                          queue={syncQueue}
-                          isOffline={effectiveOffline}
-                          simulateOffline={simulateOffline}
-                          isSyncing={isSyncing}
-                          lastSyncedAt={lastSyncedAt}
-                          onToggleSimulateOffline={() =>
-                            setSimulateOffline((v) => !v)
-                          }
-                          onTriggerSyncNow={() => void syncPendingQueue()}
-                          onRemoveQueueItem={(id) =>
-                            setSyncQueue((prev) =>
-                              prev.filter((i) => i.id !== id)
-                            )
-                          }
-                          onClearSynced={() =>
-                            setSyncQueue((prev) =>
-                              prev.filter((i) => i.status !== 'synced')
-                            )
-                          }
-                        />
-                      )}
-
-                      {widget.id === 'analytics-charts' && (
-                        <AnalyticsWidget
-                          currentResult={activeAnalyticsResult}
-                          allSnapshots={snapshots}
-                          selectedDepartment={activeSelectedDepartment}
-                          selectedSeniority={activeSelectedSeniority}
-                          onSelectDepartment={handleSelectActiveDepartment}
-                          onSelectSeniority={handleSelectActiveSeniority}
-                          onSelectDomain={(d) => {
-                            setSessionMode('domain');
-                            setActiveDomain(d);
-                            setDomainInput(d);
-                          }}
-                        />
-                      )}
-                    </DraggableWidgetCard>
-                  ))}
-                </Reorder.Group>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <WidgetsDrawerBoard
+            showWidgetsDrawer={showWidgetsDrawer}
+            widgets={widgets}
+            onResetWidgets={() => setWidgets(DEFAULT_WIDGETS)}
+            onToggleWidgetVisibility={toggleWidgetVisibility}
+            onReorderVisible={handleReorderVisible}
+            onMoveWidgetByStep={moveWidgetByStep}
+            snapshots={snapshots}
+            activeDomain={activeDomain}
+            effectiveOffline={effectiveOffline}
+            onSelectSavedSnapshot={(d) => {
+              setSessionMode('domain');
+              setActiveDomain(d);
+              setDomainInput(d);
+              setDomainSelectedDepartment('All');
+              setDomainSelectedSeniority('All');
+              setContactsPage(1);
+              setRolesPage(1);
+              setLocalSearchQuery('');
+              setActiveTab('full-names-emails');
+            }}
+            onRefreshSnapshot={(d) => void executeDomainLookup(d, true)}
+            onDeleteSnapshot={(d) => {
+              setSnapshots((prev) => {
+                const next = { ...prev };
+                delete next[d];
+                return next;
+              });
+              if (activeDomain === d) {
+                setActiveDomain(null);
+                setDomainInput('');
+              }
+            }}
+            syncQueue={syncQueue}
+            simulateOffline={simulateOffline}
+            isSyncing={isSyncing}
+            lastSyncedAt={lastSyncedAt}
+            onToggleSimulateOffline={() => setSimulateOffline((v) => !v)}
+            onTriggerSyncNow={() => void syncPendingQueue()}
+            onRemoveQueueItem={(id) =>
+              setSyncQueue((prev) => prev.filter((i) => i.id !== id))
+            }
+            onClearSynced={() =>
+              setSyncQueue((prev) => prev.filter((i) => i.status !== 'synced'))
+            }
+            activeAnalyticsResult={activeAnalyticsResult}
+            activeSelectedDepartment={activeSelectedDepartment}
+            activeSelectedSeniority={activeSelectedSeniority}
+            onSelectActiveDepartment={handleSelectActiveDepartment}
+            onSelectActiveSeniority={handleSelectActiveSeniority}
+            onSelectDomainFromAnalytics={(d) => {
+              setSessionMode('domain');
+              setActiveDomain(d);
+              setDomainInput(d);
+            }}
+          />
         </main>
       </div>
 
