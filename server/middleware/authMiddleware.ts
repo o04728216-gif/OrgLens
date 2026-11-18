@@ -17,13 +17,21 @@ export function extractBearerToken(req: Request): string {
   return '';
 }
 
+export function extractRequestDeviceId(req: Request): string | undefined {
+  const raw = String(req.headers['x-orglens-device-id'] || '')
+    .trim()
+    .slice(0, 96);
+  return raw || undefined;
+}
+
 export function requireAuth(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ): void {
   const token = extractBearerToken(req);
-  const check = inspectSessionToken(token);
+  const requestDeviceId = extractRequestDeviceId(req);
+  const check = inspectSessionToken(token, requestDeviceId);
   if (!check.user) {
     res.status(401).json({
       error:
@@ -44,7 +52,8 @@ export function requireAdmin(
   next: NextFunction
 ): void {
   const token = extractBearerToken(req);
-  const check = inspectSessionToken(token);
+  const requestDeviceId = extractRequestDeviceId(req);
+  const check = inspectSessionToken(token, requestDeviceId);
   if (!check.user) {
     res.status(401).json({
       error: check.message || 'Administrator authentication required.',

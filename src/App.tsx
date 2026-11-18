@@ -5,12 +5,20 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
-import { Building2, Crown, Loader2, Megaphone, Users } from 'lucide-react';
+import {
+  Building2,
+  Crown,
+  Loader2,
+  Megaphone,
+  Search,
+  SlidersHorizontal,
+  Users,
+} from 'lucide-react';
 import type {
   AdminSectionId,
   DepartmentCategory,
   FilterExplorerResponse,
+  FilterFacetsResponse,
   GlobalCompaniesResponse,
   GlobalCompanyItem,
   GlobalIndustryOption,
@@ -73,6 +81,20 @@ function sanitizeClientDomain(input: string): string {
     .split('?')[0]
     .split('#')[0]
     .replace(/^@/, '');
+}
+
+const INDUSTRIES_CACHE_KEY = 'orglens_industries_cache_v1';
+
+function loadCachedIndustries(): GlobalIndustryOption[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(INDUSTRIES_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as GlobalIndustryOption[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export default function App() {
@@ -138,14 +160,18 @@ export default function App() {
 
   const [globalIndustries, setGlobalIndustries] = useState<
     GlobalIndustryOption[]
-  >([]);
+  >(() => loadCachedIndustries());
   const [industriesLoading, setIndustriesLoading] = useState(false);
   const [globalDirectory, setGlobalDirectory] =
     useState<GlobalCompaniesResponse | null>(null);
   const [globalDirectoryLoading, setGlobalDirectoryLoading] = useState(false);
+  const [filterFacets, setFilterFacets] =
+    useState<FilterFacetsResponse | null>(null);
   const [filterExplorerResult, setFilterExplorerResult] =
     useState<FilterExplorerResponse | null>(null);
   const [isFilterLoading, setIsFilterLoading] = useState(false);
+  // Tracks explicit user clicks on pagination buttons so pagination fetches on demand with a clear loading indicator
+  const paginationRequestedPageRef = useRef<number | null>(null);
 
   const [filterSelectedCompany, setFilterSelectedCompany] =
     useState<GlobalCompanyItem | null>(initialRoute.filterSelectedCompany);
@@ -208,6 +234,18 @@ export default function App() {
 
   // Tracks companies already settled for the current logged-in user in this browser tab
   const sessionSettledKeysRef = useRef<Set<string>>(new Set());
+  // Client RAM cache for instant 0ms Worldwide Directory page switches
+  const directoryPageCacheRef = useRef<Map<string, GlobalCompaniesResponse>>(
+    new Map()
+  );
+  // Client RAM cache for instant 0ms Filter Explorer contact cohort switches
+  const explorerPageCacheRef = useRef<Map<string, FilterExplorerResponse>>(
+    new Map()
+  );
+  // Client RAM cache for instant 0ms Sidebar & Header Facet math
+  const facetsCacheRef = useRef<Map<string, FilterFacetsResponse>>(new Map());
+  // Deduplicates background /api/prefetch calls per browser session
+  const prefetchedTargetsRef = useRef<Set<string>>(new Set());
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const resultsTopRef = useRef<HTMLDivElement>(null);
@@ -320,12 +358,25 @@ export default function App() {
   useEffect(() => {
     if (effectiveOffline || !user) return;
     let cancelled = false;
-    setIndustriesLoading(true);
+    setGlobalIndustries((prev) => {
+      if (prev.length === 0) {
+        setIndustriesLoading(true);
+      }
+      return prev;
+    });
     apiFetch('/api/industries')
       .then((r) => (r.ok ? r.json() : null))
       .then((payload) => {
         if (!cancelled && Array.isArray(payload?.industries)) {
           setGlobalIndustries(payload.industries);
+          try {
+            window.localStorage.setItem(
+              INDUSTRIES_CACHE_KEY,
+              JSON.stringify(payload.industries)
+            );
+          } catch {
+            // Ignore quota errors
+          }
         }
       })
       .catch(() => {
@@ -355,17 +406,38 @@ export default function App() {
   }));
 
   useEffect(() => {
+    const nextCompanyName = filters.companyNameFilter.trim();
+    const nextIndustryKeyword = filters.industryKeyword.trim();
+    const nextLocationQuery = filters.locationQuery.trim();
+    const nextContactSearch = filters.contactSearch.trim();
+    const nextRoleKeyword = filters.roleKeyword.trim();
+    const nextMinAccuracy = filters.minAccuracy;
+    const nextMaxAccuracy = filters.maxAccuracy;
+
     const timer = window.setTimeout(() => {
-      setDebouncedTextFilters({
-        companyNameFilter: filters.companyNameFilter.trim(),
-        industryKeyword: filters.industryKeyword.trim(),
-        locationQuery: filters.locationQuery.trim(),
-        contactSearch: filters.contactSearch.trim(),
-        roleKeyword: filters.roleKeyword.trim(),
-        minAccuracy: filters.minAccuracy,
-        maxAccuracy: filters.maxAccuracy,
+      setDebouncedTextFilters((prev) => {
+        if (
+          prev.companyNameFilter === nextCompanyName &&
+          prev.industryKeyword === nextIndustryKeyword &&
+          prev.locationQuery === nextLocationQuery &&
+          prev.contactSearch === nextContactSearch &&
+          prev.roleKeyword === nextRoleKeyword &&
+          prev.minAccuracy === nextMinAccuracy &&
+          prev.maxAccuracy === nextMaxAccuracy
+        ) {
+          return prev;
+        }
+        return {
+          companyNameFilter: nextCompanyName,
+          industryKeyword: nextIndustryKeyword,
+          locationQuery: nextLocationQuery,
+          contactSearch: nextContactSearch,
+          roleKeyword: nextRoleKeyword,
+          minAccuracy: nextMinAccuracy,
+          maxAccuracy: nextMaxAccuracy,
+        };
       });
-    }, 220);
+    }, 120);
     return () => window.clearTimeout(timer);
   }, [
     filters.companyNameFilter,
@@ -385,85 +457,213 @@ export default function App() {
   const selectedEmpRangesKey = filters.employeeRanges.join('|');
   const selectedRevRangesKey = filters.revenueRanges.join('|');
 
+  const prefetchCompanyLookup = useCallback(
+    (rawDomain?: string | null, companySlug?: string | null) => {
+      if (effectiveOffline || !user) return;
+      const cleanDom = rawDomain ? sanitizeClientDomain(rawDomain) : '';
+      const cleanSlug = (companySlug || '').trim().toLowerCase();
+      if (!cleanSlug && (!cleanDom || !cleanDom.includes('.'))) return;
+
+      const key = `${cleanDom}|${cleanSlug}`;
+      if (prefetchedTargetsRef.current.has(key)) return;
+      prefetchedTargetsRef.current.add(key);
+
+      const q = new URLSearchParams();
+      if (cleanDom && cleanDom.includes('.')) q.set('domain', cleanDom);
+      if (cleanSlug) q.set('companySlug', cleanSlug);
+      void apiFetch(`/api/prefetch?${q.toString()}`).catch(() => {
+        // Silent background cache warm
+      });
+    },
+    [effectiveOffline, user]
+  );
+
+  // Warm server domain cache while user types a valid domain in the search bar
   useEffect(() => {
     if (effectiveOffline || !user || appView !== 'workspace') return;
-    if (sessionMode !== 'filter' && activeFilterCount === 0) {
+    const candidate = sanitizeClientDomain(domainInput);
+    if (
+      !candidate ||
+      candidate.length < 4 ||
+      !candidate.includes('.') ||
+      candidate.endsWith('.') ||
+      snapshots[candidate]
+    ) {
+      return;
+    }
+    const tlds = candidate.split('.');
+    const lastPart = tlds[tlds.length - 1] || '';
+    if (lastPart.length < 2) return;
+
+    const timer = window.setTimeout(() => {
+      prefetchCompanyLookup(candidate, null);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [domainInput, effectiveOffline, user, appView, snapshots, prefetchCompanyLookup]);
+
+  const buildCompanyParams = useCallback(
+    (pageNum: number) => {
+      const p = new URLSearchParams();
+      if (selectedSlugsKey) p.set('slugs', selectedSlugsKey);
+      if (selectedCountriesKey) p.set('countries', selectedCountriesKey);
+      if (selectedContinentsKey) p.set('continents', selectedContinentsKey);
+      if (debouncedTextFilters.companyNameFilter) {
+        p.set('q', debouncedTextFilters.companyNameFilter);
+      }
+      if (debouncedTextFilters.industryKeyword) {
+        p.set('industryKeyword', debouncedTextFilters.industryKeyword);
+      }
+      if (filters.industryMatchMode) {
+        p.set('industryMatchMode', filters.industryMatchMode);
+      }
+      if (selectedEmpRangesKey) {
+        p.set('employeeRanges', selectedEmpRangesKey);
+      }
+      if (selectedRevRangesKey) {
+        p.set('revenueRanges', selectedRevRangesKey);
+      }
+      if (debouncedTextFilters.locationQuery) {
+        p.set('locationQuery', debouncedTextFilters.locationQuery);
+      }
+      p.set('page', String(Math.max(1, pageNum)));
+      return p.toString();
+    },
+    [
+      selectedSlugsKey,
+      selectedCountriesKey,
+      selectedContinentsKey,
+      debouncedTextFilters.companyNameFilter,
+      debouncedTextFilters.industryKeyword,
+      debouncedTextFilters.locationQuery,
+      filters.industryMatchMode,
+      selectedEmpRangesKey,
+      selectedRevRangesKey,
+    ]
+  );
+
+  const buildExplorerParams = useCallback(
+    (pageNum: number) => {
+      const params = new URLSearchParams();
+      if (selectedSlugsKey) params.set('slugs', selectedSlugsKey);
+      if (selectedCountriesKey) params.set('countries', selectedCountriesKey);
+      if (selectedContinentsKey) {
+        params.set('continents', selectedContinentsKey);
+      }
+      if (debouncedTextFilters.companyNameFilter) {
+        params.set('q', debouncedTextFilters.companyNameFilter);
+      }
+      if (debouncedTextFilters.industryKeyword) {
+        params.set('industryKeyword', debouncedTextFilters.industryKeyword);
+      }
+      if (filters.industryMatchMode) {
+        params.set('industryMatchMode', filters.industryMatchMode);
+      }
+      if (selectedEmpRangesKey) {
+        params.set('employeeRanges', selectedEmpRangesKey);
+      }
+      if (selectedRevRangesKey) {
+        params.set('revenueRanges', selectedRevRangesKey);
+      }
+      if (debouncedTextFilters.locationQuery) {
+        params.set('locationQuery', debouncedTextFilters.locationQuery);
+      }
+      if (debouncedTextFilters.contactSearch) {
+        params.set('contactSearch', debouncedTextFilters.contactSearch);
+      }
+      if (debouncedTextFilters.roleKeyword) {
+        params.set('roleKeyword', debouncedTextFilters.roleKeyword);
+      }
+      if (selectedSenioritiesKey) {
+        params.set('seniorities', selectedSenioritiesKey);
+      }
+      if (selectedDepartmentsKey) {
+        params.set('departments', selectedDepartmentsKey);
+      }
+      params.set('minAccuracy', String(debouncedTextFilters.minAccuracy));
+      params.set('maxAccuracy', String(debouncedTextFilters.maxAccuracy));
+      params.set('emailFormulaOverride', filters.emailFormulaOverride);
+      params.set('page', String(Math.max(1, pageNum)));
+      return params.toString();
+    },
+    [
+      selectedSlugsKey,
+      selectedCountriesKey,
+      selectedContinentsKey,
+      debouncedTextFilters,
+      filters.industryMatchMode,
+      filters.emailFormulaOverride,
+      selectedEmpRangesKey,
+      selectedRevRangesKey,
+      selectedSenioritiesKey,
+      selectedDepartmentsKey,
+    ]
+  );
+
+  const handleNavigateGlobalPage = useCallback((nextPage: number) => {
+    const bounded = Math.max(1, nextPage);
+    paginationRequestedPageRef.current = bounded;
+    setGlobalPage(bounded);
+  }, []);
+  useEffect(() => {
+    if (effectiveOffline || !user || appView !== 'workspace') return;
+
+    const p = new URLSearchParams();
+    if (selectedSlugsKey) p.set('slugs', selectedSlugsKey);
+    if (selectedCountriesKey) p.set('countries', selectedCountriesKey);
+    if (selectedContinentsKey) p.set('continents', selectedContinentsKey);
+    if (debouncedTextFilters.companyNameFilter) {
+      p.set('q', debouncedTextFilters.companyNameFilter);
+    }
+    if (debouncedTextFilters.industryKeyword) {
+      p.set('industryKeyword', debouncedTextFilters.industryKeyword);
+    }
+    if (filters.industryMatchMode) {
+      p.set('industryMatchMode', filters.industryMatchMode);
+    }
+    if (selectedEmpRangesKey) p.set('employeeRanges', selectedEmpRangesKey);
+    if (selectedRevRangesKey) p.set('revenueRanges', selectedRevRangesKey);
+    if (debouncedTextFilters.locationQuery) {
+      p.set('locationQuery', debouncedTextFilters.locationQuery);
+    }
+    if (debouncedTextFilters.contactSearch) {
+      p.set('contactSearch', debouncedTextFilters.contactSearch);
+    }
+    if (debouncedTextFilters.roleKeyword) {
+      p.set('roleKeyword', debouncedTextFilters.roleKeyword);
+    }
+    if (selectedSenioritiesKey) p.set('seniorities', selectedSenioritiesKey);
+    if (selectedDepartmentsKey) p.set('departments', selectedDepartmentsKey);
+    p.set('minAccuracy', String(debouncedTextFilters.minAccuracy));
+    p.set('maxAccuracy', String(debouncedTextFilters.maxAccuracy));
+
+    const facetsKey = p.toString();
+    const cachedFacets = facetsCacheRef.current.get(facetsKey);
+    if (cachedFacets) {
+      setFilterFacets((prev) => (prev === cachedFacets ? prev : cachedFacets));
       return;
     }
 
     const controller = new AbortController();
-    setIsFilterLoading(true);
-    setGlobalDirectoryLoading(true);
-
-    const params = new URLSearchParams();
-    if (selectedSlugsKey) params.set('slugs', selectedSlugsKey);
-    if (selectedCountriesKey) params.set('countries', selectedCountriesKey);
-    if (selectedContinentsKey) params.set('continents', selectedContinentsKey);
-    if (debouncedTextFilters.companyNameFilter) {
-      params.set('q', debouncedTextFilters.companyNameFilter);
-    }
-    if (debouncedTextFilters.industryKeyword) {
-      params.set('industryKeyword', debouncedTextFilters.industryKeyword);
-    }
-    if (filters.industryMatchMode) {
-      params.set('industryMatchMode', filters.industryMatchMode);
-    }
-    if (selectedEmpRangesKey) {
-      params.set('employeeRanges', selectedEmpRangesKey);
-    }
-    if (selectedRevRangesKey) {
-      params.set('revenueRanges', selectedRevRangesKey);
-    }
-    if (debouncedTextFilters.locationQuery) {
-      params.set('locationQuery', debouncedTextFilters.locationQuery);
-    }
-    if (debouncedTextFilters.contactSearch) {
-      params.set('contactSearch', debouncedTextFilters.contactSearch);
-    }
-    if (debouncedTextFilters.roleKeyword) {
-      params.set('roleKeyword', debouncedTextFilters.roleKeyword);
-    }
-    if (selectedSenioritiesKey) {
-      params.set('seniorities', selectedSenioritiesKey);
-    }
-    if (selectedDepartmentsKey) {
-      params.set('departments', selectedDepartmentsKey);
-    }
-    params.set('minAccuracy', String(debouncedTextFilters.minAccuracy));
-    params.set('maxAccuracy', String(debouncedTextFilters.maxAccuracy));
-    params.set('emailFormulaOverride', filters.emailFormulaOverride);
-    params.set('page', String(globalPage));
-
-    apiFetch(`/api/filter-explorer?${params.toString()}`, {
+    apiFetch(`/api/filter-facets?${facetsKey}`, {
       signal: controller.signal,
     })
       .then((r) => (r.ok ? r.json() : null))
-      .then((payload: FilterExplorerResponse | null) => {
+      .then((payload: FilterFacetsResponse | null) => {
         if (
           !controller.signal.aborted &&
           payload &&
-          Array.isArray(payload.employees)
+          typeof payload.totalMatchedCompanies === 'number'
         ) {
-          setFilterExplorerResult(payload);
-          setGlobalDirectory({
-            industrySlug: selectedSlugsKey || 'all',
-            industryFullTitle: payload.scopeTitle,
-            page: payload.page,
-            perPage: 500,
-            totalCompanies: payload.totalMatchedCompanies,
-            totalPages: payload.totalPages,
-            companies: payload.companies,
-          });
+          if (facetsCacheRef.current.size > 150) {
+            const oldest = facetsCacheRef.current.keys().next().value;
+            if (oldest !== undefined) facetsCacheRef.current.delete(oldest);
+          }
+          facetsCacheRef.current.set(facetsKey, payload);
+          setFilterFacets(payload);
         }
       })
       .catch(() => {
-        // Aborted or transient network issue
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setIsFilterLoading(false);
-          setGlobalDirectoryLoading(false);
-        }
+        // Non-fatal
       });
 
     return () => {
@@ -472,8 +672,6 @@ export default function App() {
   }, [
     user,
     appView,
-    sessionMode,
-    activeFilterCount,
     selectedSlugsKey,
     selectedCountriesKey,
     selectedContinentsKey,
@@ -482,8 +680,169 @@ export default function App() {
     selectedEmpRangesKey,
     selectedRevRangesKey,
     filters.industryMatchMode,
-    filters.emailFormulaOverride,
     debouncedTextFilters,
+    effectiveOffline,
+  ]);
+
+  // 1. Worldwide Companies Loader — Page 1 stays silent in background; pagination fetches ON DEMAND with clear loading feedback!
+  useEffect(() => {
+    if (effectiveOffline || !user || appView !== 'workspace') return;
+
+    const queryStr = buildCompanyParams(globalPage);
+    const cachedPage = directoryPageCacheRef.current.get(queryStr);
+    const isExplicitPaginationTurn =
+      paginationRequestedPageRef.current === globalPage;
+
+    if (cachedPage) {
+      if (isExplicitPaginationTurn) {
+        setGlobalDirectoryLoading(true);
+        const timer = window.setTimeout(() => {
+          setGlobalDirectory((prev) =>
+            prev === cachedPage ? prev : cachedPage
+          );
+          setGlobalDirectoryLoading(false);
+          if (paginationRequestedPageRef.current === globalPage) {
+            paginationRequestedPageRef.current = null;
+          }
+        }, 160);
+        return () => window.clearTimeout(timer);
+      }
+      setGlobalDirectory((prev) => (prev === cachedPage ? prev : cachedPage));
+      setGlobalDirectoryLoading(false);
+      return;
+    }
+
+    // Show loading indicator on initial empty state OR when user explicitly navigates to another pagination page on demand;
+    // keep Page 1 filter updates silent in background so displayed results never flash!
+    setGlobalDirectory((prev) => {
+      if (!prev || isExplicitPaginationTurn || globalPage > 1) {
+        setGlobalDirectoryLoading(true);
+      }
+      return prev;
+    });
+
+    const controller = new AbortController();
+
+    apiFetch(`/api/industry-companies?${queryStr}`, {
+      signal: controller.signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload: GlobalCompaniesResponse | null) => {
+        if (
+          !controller.signal.aborted &&
+          payload &&
+          Array.isArray(payload.companies)
+        ) {
+          if (directoryPageCacheRef.current.size > 150) {
+            const firstKey = directoryPageCacheRef.current.keys().next().value;
+            if (firstKey !== undefined) {
+              directoryPageCacheRef.current.delete(firstKey);
+            }
+          }
+          directoryPageCacheRef.current.set(queryStr, payload);
+          setGlobalDirectory(payload);
+        }
+      })
+      .catch(() => {
+        // Aborted or transient network issue
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setGlobalDirectoryLoading(false);
+          if (paginationRequestedPageRef.current === globalPage) {
+            paginationRequestedPageRef.current = null;
+          }
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [user, appView, buildCompanyParams, globalPage, effectiveOffline]);
+
+  // 2. Contact Cohort Loader — Page 1 runs silently in background; pagination batches fetch ON DEMAND with loading state!
+  useEffect(() => {
+    if (effectiveOffline || !user || appView !== 'workspace') return;
+    if (sessionMode !== 'filter' && activeFilterCount === 0) {
+      return;
+    }
+
+    const explorerQueryStr = buildExplorerParams(globalPage);
+    const cachedExplorer = explorerPageCacheRef.current.get(explorerQueryStr);
+    const isExplicitPaginationTurn =
+      paginationRequestedPageRef.current === globalPage;
+
+    if (cachedExplorer) {
+      if (isExplicitPaginationTurn && activeTab !== 'industry') {
+        setIsFilterLoading(true);
+        const t = window.setTimeout(() => {
+          setFilterExplorerResult((prev) =>
+            prev === cachedExplorer ? prev : cachedExplorer
+          );
+          setIsFilterLoading(false);
+        }, 160);
+        return () => window.clearTimeout(t);
+      }
+      setFilterExplorerResult((prev) =>
+        prev === cachedExplorer ? prev : cachedExplorer
+      );
+      setIsFilterLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const deferMs =
+      sessionMode === 'filter' && activeTab === 'industry' ? 320 : 0;
+
+    const timer = window.setTimeout(() => {
+      setFilterExplorerResult((prev) => {
+        if (!prev || isExplicitPaginationTurn || globalPage > 1) {
+          setIsFilterLoading(true);
+        }
+        return prev;
+      });
+
+      apiFetch(`/api/filter-explorer?${explorerQueryStr}`, {
+        signal: controller.signal,
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((payload: FilterExplorerResponse | null) => {
+          if (
+            !controller.signal.aborted &&
+            payload &&
+            Array.isArray(payload.employees)
+          ) {
+            if (explorerPageCacheRef.current.size > 80) {
+              const firstKey = explorerPageCacheRef.current.keys().next().value;
+              if (firstKey !== undefined) {
+                explorerPageCacheRef.current.delete(firstKey);
+              }
+            }
+            explorerPageCacheRef.current.set(explorerQueryStr, payload);
+            setFilterExplorerResult(payload);
+          }
+        })
+        .catch(() => {
+          // Aborted or transient network issue
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setIsFilterLoading(false);
+          }
+        });
+    }, deferMs);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    user,
+    appView,
+    sessionMode,
+    activeTab,
+    activeFilterCount,
+    buildExplorerParams,
     globalPage,
     effectiveOffline,
   ]);
@@ -497,14 +856,11 @@ export default function App() {
       setFilterSelectedCompany(null);
       setFilterCompanyResult(null);
       setFilterCompanyError(null);
-      setSessionMode((prevMode) => {
-        if (prevMode !== 'filter') {
-          setActiveTab('industry');
-        }
-        return 'filter';
-      });
+      setSessionMode('filter');
+      setActiveTab('industry');
       setFilterSelectedDepartment('All');
       setFilterSelectedSeniority('All');
+      paginationRequestedPageRef.current = null;
       setGlobalPage(1);
       setContactsPage(1);
       setRolesPage(1);
@@ -1119,14 +1475,11 @@ export default function App() {
     setFilterSelectedCompany(null);
     setFilterCompanyResult(null);
     setFilterCompanyError(null);
-    setSessionMode((prevMode) => {
-      if (prevMode !== 'filter') {
-        setActiveTab('industry');
-      }
-      return 'filter';
-    });
+    setSessionMode('filter');
+    setActiveTab('industry');
     setFilterSelectedDepartment('All');
     setFilterSelectedSeniority('All');
+    paginationRequestedPageRef.current = null;
     setGlobalPage(1);
     setContactsPage(1);
     setRolesPage(1);
@@ -1213,6 +1566,22 @@ export default function App() {
     [sessionMode]
   );
 
+  const coherentFilterOrgsTotal = useMemo(() => {
+    if (filterFacets) return filterFacets.totalMatchedCompanies;
+    if (globalDirectory) return globalDirectory.totalCompanies;
+    if (filterExplorerResult) return filterExplorerResult.totalMatchedCompanies;
+    return 0;
+  }, [filterFacets, globalDirectory, filterExplorerResult]);
+
+  const coherentFilterContactsTotal = useMemo(() => {
+    if (filterFacets) return filterFacets.totalMatchedContacts;
+    return activeTotalMatchedContacts;
+  }, [filterFacets, activeTotalMatchedContacts]);
+
+  const hasCoherentFilterTotals = Boolean(
+    filterFacets || globalDirectory || filterExplorerResult
+  );
+
   const fullNamesTab: PrimaryTabConfig = {
     id: 'full-names-emails',
     label: 'Full Names & Emails',
@@ -1226,8 +1595,8 @@ export default function App() {
         ? filterCompanyResult
           ? filterCompanyResult.employees.length.toLocaleString()
           : undefined
-        : filterExplorerResult
-        ? activeTotalMatchedContacts.toLocaleString()
+        : hasCoherentFilterTotals
+        ? coherentFilterContactsTotal.toLocaleString()
         : undefined,
   };
 
@@ -1235,18 +1604,7 @@ export default function App() {
     id: 'command-hierarchy',
     label: 'Command Hierarchy',
     icon: Crown,
-    badge:
-      sessionMode === 'domain'
-        ? currentDomainResult
-          ? `${currentDomainResult.employees.length.toLocaleString()} Roles`
-          : undefined
-        : filterSelectedCompany
-        ? filterCompanyResult
-          ? `${filterCompanyResult.employees.length.toLocaleString()} Roles`
-          : undefined
-        : filterExplorerResult
-        ? `${activeTotalMatchedContacts.toLocaleString()} Roles`
-        : undefined,
+    badge: undefined,
   };
 
   const industryTab: PrimaryTabConfig = {
@@ -1256,10 +1614,8 @@ export default function App() {
     badge:
       sessionMode === 'domain'
         ? currentDomainResult?.industryTags?.[0] || undefined
-        : filterExplorerResult
-        ? `${filterExplorerResult.totalMatchedCompanies.toLocaleString()} Orgs`
-        : globalDirectory
-        ? `${globalDirectory.totalCompanies.toLocaleString()} Orgs`
+        : hasCoherentFilterTotals
+        ? `${coherentFilterOrgsTotal.toLocaleString()} Orgs`
         : undefined,
   };
 
@@ -1388,26 +1744,12 @@ export default function App() {
         sessionMode={sessionMode}
         activeTab={activeTab}
         primaryTabs={primaryTabs}
-        showWidgetsDrawer={showWidgetsDrawer}
-        totalMatchedCompanies={filterExplorerResult?.totalMatchedCompanies}
         onBrandClick={() => {
           setAppView('workspace');
           setSessionMode('domain');
           setActiveTab('full-names-emails');
         }}
         onSelectTab={handleSelectPrimaryTab}
-        onToggleWidgetsDrawer={() => {
-          setAppView('workspace');
-          setShowWidgetsDrawer((v) => !v);
-        }}
-        onOpenWorldwideExplorer={() => {
-          setAppView('workspace');
-          if (!filterSelectedCompany) {
-            setActiveTab('industry');
-          }
-          setSessionMode('filter');
-          scrollToListTop(resultsTopRef.current);
-        }}
         onFocusDomainLookup={() => {
           setAppView('workspace');
           setSessionMode('domain');
@@ -1493,6 +1835,7 @@ export default function App() {
               setFilterCompanyError(null);
               setFilterSelectedDepartment('All');
               setFilterSelectedSeniority('All');
+              paginationRequestedPageRef.current = null;
               setGlobalPage(1);
               setContactsPage(1);
               setRolesPage(1);
@@ -1504,12 +1847,8 @@ export default function App() {
             industriesLoading={industriesLoading}
             onSelectIndustryFilter={handleSelectIndustryFilter}
             onActivateCompanyDirectory={() => {
-              setSessionMode((prev) => {
-                if (prev !== 'filter') {
-                  setActiveTab('industry');
-                }
-                return 'filter';
-              });
+              setSessionMode('filter');
+              setActiveTab('industry');
             }}
             onDomainDirectLookup={(d) => {
               setSessionMode('domain');
@@ -1527,7 +1866,11 @@ export default function App() {
             onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
             mobileOpen={mobileSidebarOpen}
             onCloseMobile={() => setMobileSidebarOpen(false)}
-            isFilterLoading={isFilterLoading}
+            isFilterLoading={
+              !hasCoherentFilterTotals &&
+              (isFilterLoading || globalDirectoryLoading)
+            }
+            filterFacets={filterFacets}
           />
 
           <main className="flex-1 min-w-0 space-y-4">
@@ -1565,187 +1908,188 @@ export default function App() {
               activeTab={activeTab}
               primaryTabs={primaryTabs}
               currentDomainResult={currentDomainResult}
-              filterExplorerResult={filterExplorerResult}
-              activeTotalMatchedContacts={activeTotalMatchedContacts}
+              coherentMatchedOrgs={coherentFilterOrgsTotal}
+              hasFilterTotals={hasCoherentFilterTotals}
               activeFilterCount={activeFilterCount}
-              isFilterLoading={isFilterLoading}
+              isFilterLoading={
+                !hasCoherentFilterTotals &&
+                (isFilterLoading || globalDirectoryLoading)
+              }
               isFilterCompanyLoading={isFilterCompanyLoading}
               onSelectDomainSession={() => {
                 setSessionMode('domain');
+                setActiveTab('full-names-emails');
                 setLocalSearchQuery('');
               }}
               onSelectFilterSession={() => {
-                if (sessionMode !== 'filter' && !filterSelectedCompany) {
-                  setActiveTab('industry');
-                }
                 setSessionMode('filter');
+                setActiveTab(filterSelectedCompany ? 'full-names-emails' : 'industry');
                 setLocalSearchQuery('');
               }}
               onSelectTab={handleSelectPrimaryTab}
             />
 
-            <AnimatePresence mode="wait">
-              {activeTab === 'full-names-emails' && (
-                <motion.section
-                  key={`tab-full-names-emails-${sessionMode}-${
-                    filterSelectedCompany?.slug || 'cohort'
-                  }`}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  transition={{ duration: 0.16 }}
-                  className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
-                >
-                  <EmployeeTableWidget
-                    sessionMode={sessionMode}
-                    domainResult={currentDomainResult}
-                    isDomainLoading={isDomainLoading}
-                    loadingDomain={loadingDomain}
-                    filterResult={filterExplorerResult}
-                    isFilterLoading={isFilterLoading}
-                    filters={filters}
-                    onSwitchToFilterSession={() => {
-                      setSessionMode('filter');
-                      setActiveTab('industry');
-                    }}
-                    onFocusDomainInput={() => searchInputRef.current?.focus()}
-                    onInspectDomainFromFilter={(domain) => {
-                      void executeDomainLookup(domain, false);
-                    }}
-                    filterSelectedCompany={filterSelectedCompany}
-                    filterCompanyResult={filterCompanyResult}
-                    isFilterCompanyLoading={isFilterCompanyLoading}
-                    filterCompanyError={filterCompanyError}
-                    onBackToCompaniesList={handleBackToCompaniesList}
-                    onSelectCompanyFromFilterContact={(compInfo) => {
-                      handleSelectGlobalCompany({
-                        id: compInfo.slug,
-                        slug: compInfo.slug,
-                        name: compInfo.name,
-                        domain: compInfo.domain,
-                        websiteUrl: `https://${compInfo.domain}`,
-                        logoUrl: null,
-                        location: 'Worldwide',
-                        industry: '',
-                        employeeRange: '',
-                        revenueRange: '',
-                      });
-                    }}
-                    globalPage={globalPage}
-                    onChangeGlobalPage={(pg) => {
-                      setGlobalPage(pg);
-                      setContactsPage(1);
-                    }}
-                    contactsPage={contactsPage}
-                    onChangeContactsPage={setContactsPage}
-                    urlLocalQuery={localSearchQuery}
-                    onChangeUrlLocalQuery={setLocalSearchQuery}
-                    monthlyPriceUsdt={publicConfig.unlimitedMonthlyPriceUsdt}
-                    onOpenUpgrade={() => setAppView('upgrade')}
-                    copyFormat={user.preferences?.copyFormat}
-                    autoScrollOnPagination={
-                      user.preferences?.autoScrollOnPagination ?? true
-                    }
-                    exportFilenamePrefix={
-                      user.preferences?.exportFilenamePrefix
-                    }
-                  />
-                </motion.section>
-              )}
+            <section
+              aria-hidden={activeTab !== 'full-names-emails'}
+              className={
+                activeTab === 'full-names-emails'
+                  ? 'block rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-3.5 sm:p-6 shadow-xs'
+                  : 'hidden'
+              }
+            >
+              <EmployeeTableWidget
+                sessionMode={sessionMode}
+                domainResult={currentDomainResult}
+                isDomainLoading={isDomainLoading}
+                loadingDomain={loadingDomain}
+                filterResult={filterExplorerResult}
+                isFilterLoading={isFilterLoading}
+                filters={filters}
+                onSwitchToFilterSession={() => {
+                  setSessionMode('filter');
+                  setActiveTab('industry');
+                }}
+                onFocusDomainInput={() => searchInputRef.current?.focus()}
+                onInspectDomainFromFilter={(domain) => {
+                  void executeDomainLookup(domain, false);
+                }}
+                filterSelectedCompany={filterSelectedCompany}
+                filterCompanyResult={filterCompanyResult}
+                isFilterCompanyLoading={isFilterCompanyLoading}
+                filterCompanyError={filterCompanyError}
+                onBackToCompaniesList={handleBackToCompaniesList}
+                onSelectCompanyFromFilterContact={(compInfo) => {
+                  handleSelectGlobalCompany({
+                    id: compInfo.slug,
+                    slug: compInfo.slug,
+                    name: compInfo.name,
+                    domain: compInfo.domain,
+                    websiteUrl: `https://${compInfo.domain}`,
+                    logoUrl: null,
+                    location: 'Worldwide',
+                    industry: '',
+                    employeeRange: '',
+                    revenueRange: '',
+                  });
+                }}
+                globalPage={globalPage}
+                onChangeGlobalPage={(pg) => {
+                  handleNavigateGlobalPage(pg);
+                  setContactsPage(1);
+                }}
+                contactsPage={contactsPage}
+                onChangeContactsPage={setContactsPage}
+                urlLocalQuery={localSearchQuery}
+                onChangeUrlLocalQuery={setLocalSearchQuery}
+                monthlyPriceUsdt={publicConfig.unlimitedMonthlyPriceUsdt}
+                onOpenUpgrade={() => setAppView('upgrade')}
+                copyFormat={user.preferences?.copyFormat}
+                autoScrollOnPagination={
+                  user.preferences?.autoScrollOnPagination ?? true
+                }
+                exportFilenamePrefix={
+                  user.preferences?.exportFilenamePrefix
+                }
+                coherentMatchedOrgs={
+                  hasCoherentFilterTotals ? coherentFilterOrgsTotal : undefined
+                }
+              />
+            </section>
 
-              {activeTab === 'command-hierarchy' && (
-                <motion.section
-                  key={`tab-command-hierarchy-${sessionMode}-${
-                    filterSelectedCompany?.slug || 'cohort'
-                  }`}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  transition={{ duration: 0.16 }}
-                  className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
-                >
-                  <JobTitleTab
-                    sessionMode={sessionMode}
-                    domainResult={currentDomainResult}
-                    isDomainLoading={isDomainLoading}
-                    filterResult={filterExplorerResult}
-                    isFilterLoading={isFilterLoading}
-                    filters={filters}
-                    selectedDepartment={activeSelectedDepartment}
-                    selectedSeniority={activeSelectedSeniority}
-                    onSelectDepartment={handleSelectActiveDepartment}
-                    onSelectSeniority={handleSelectActiveSeniority}
-                    onSwitchToFilterSession={() => {
-                      setSessionMode('filter');
-                      setActiveTab('industry');
-                    }}
-                    onFocusDomainInput={() => searchInputRef.current?.focus()}
-                    filterSelectedCompany={filterSelectedCompany}
-                    filterCompanyResult={filterCompanyResult}
-                    isFilterCompanyLoading={isFilterCompanyLoading}
-                    onBackToCompaniesList={handleBackToCompaniesList}
-                    globalPage={globalPage}
-                    onChangeGlobalPage={(pg) => {
-                      setGlobalPage(pg);
-                      setRolesPage(1);
-                    }}
-                    rolesPage={rolesPage}
-                    onChangeRolesPage={setRolesPage}
-                    urlRoleQuery={localSearchQuery}
-                    onChangeUrlRoleQuery={setLocalSearchQuery}
-                  />
-                </motion.section>
-              )}
+            <section
+              aria-hidden={activeTab !== 'command-hierarchy'}
+              className={
+                activeTab === 'command-hierarchy'
+                  ? 'block rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-3.5 sm:p-6 shadow-xs'
+                  : 'hidden'
+              }
+            >
+              <JobTitleTab
+                sessionMode={sessionMode}
+                domainResult={currentDomainResult}
+                isDomainLoading={isDomainLoading}
+                filterResult={filterExplorerResult}
+                isFilterLoading={isFilterLoading}
+                filters={filters}
+                selectedDepartment={activeSelectedDepartment}
+                selectedSeniority={activeSelectedSeniority}
+                onSelectDepartment={handleSelectActiveDepartment}
+                onSelectSeniority={handleSelectActiveSeniority}
+                onSwitchToFilterSession={() => {
+                  setSessionMode('filter');
+                  setActiveTab('industry');
+                }}
+                onFocusDomainInput={() => searchInputRef.current?.focus()}
+                filterSelectedCompany={filterSelectedCompany}
+                filterCompanyResult={filterCompanyResult}
+                isFilterCompanyLoading={isFilterCompanyLoading}
+                onBackToCompaniesList={handleBackToCompaniesList}
+                globalPage={globalPage}
+                onChangeGlobalPage={(pg) => {
+                  handleNavigateGlobalPage(pg);
+                  setRolesPage(1);
+                }}
+                rolesPage={rolesPage}
+                onChangeRolesPage={setRolesPage}
+                urlRoleQuery={localSearchQuery}
+                onChangeUrlRoleQuery={setLocalSearchQuery}
+              />
+            </section>
 
-              {activeTab === 'industry' && (
-                <motion.section
-                  key={`tab-industry-${sessionMode}`}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  transition={{ duration: 0.16 }}
-                  className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-5 sm:p-6 shadow-xs"
-                >
-                  <IndustryTab
-                    sessionMode={sessionMode}
-                    domainResult={currentDomainResult}
-                    allSnapshots={snapshots}
-                    isDomainLoading={isDomainLoading}
-                    filterResult={filterExplorerResult}
-                    isFilterLoading={isFilterLoading}
-                    filters={filters}
-                    globalIndustries={globalIndustries}
-                    globalDirectory={globalDirectory}
-                    globalDirectoryLoading={globalDirectoryLoading}
-                    globalPage={globalPage}
-                    onChangeGlobalPage={setGlobalPage}
-                    onSelectIndustrySlug={(slug) => {
-                      setFilters((prev) => ({
-                        ...prev,
-                        selectedIndustrySlugs: slug ? [slug] : [],
-                      }));
-                      setSessionMode('filter');
-                      setGlobalPage(1);
-                      setContactsPage(1);
-                      setRolesPage(1);
-                    }}
-                    onSelectGlobalCompany={handleSelectGlobalCompany}
-                    onSelectDomain={(d) => {
-                      setSessionMode('domain');
-                      setActiveTab('full-names-emails');
-                      void executeDomainLookup(d, false);
-                    }}
-                    onSwitchSessionMode={(mode) => {
-                      if (mode === 'filter') {
-                        setActiveTab('industry');
-                      }
-                      setSessionMode(mode);
-                    }}
-                    onFocusDomainInput={() => searchInputRef.current?.focus()}
-                  />
-                </motion.section>
-              )}
-            </AnimatePresence>
+            <section
+              aria-hidden={activeTab !== 'industry'}
+              className={
+                activeTab === 'industry'
+                  ? 'block rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/65 border border-slate-200/85 dark:border-slate-800/85 p-3.5 sm:p-6 shadow-xs'
+                  : 'hidden'
+              }
+            >
+              <IndustryTab
+                sessionMode={sessionMode}
+                domainResult={currentDomainResult}
+                allSnapshots={snapshots}
+                isDomainLoading={isDomainLoading}
+                filterResult={filterExplorerResult}
+                isFilterLoading={isFilterLoading}
+                filters={filters}
+                globalIndustries={globalIndustries}
+                globalDirectory={globalDirectory}
+                globalDirectoryLoading={globalDirectoryLoading}
+                filterFacets={filterFacets}
+                coherentTotalCompanies={coherentFilterOrgsTotal}
+                globalPage={globalPage}
+                onChangeGlobalPage={handleNavigateGlobalPage}
+                onSelectIndustrySlug={(slug) => {
+                  setFilters((prev) => ({
+                    ...prev,
+                    selectedIndustrySlugs: slug ? [slug] : [],
+                  }));
+                  setSessionMode('filter');
+                  paginationRequestedPageRef.current = null;
+                  setGlobalPage(1);
+                  setContactsPage(1);
+                  setRolesPage(1);
+                }}
+                onSelectGlobalCompany={handleSelectGlobalCompany}
+                onPrefetchCompany={(comp) =>
+                  prefetchCompanyLookup(comp.domain, comp.slug)
+                }
+                onSelectDomain={(d) => {
+                  setSessionMode('domain');
+                  setActiveTab('full-names-emails');
+                  void executeDomainLookup(d, false);
+                }}
+                onSwitchSessionMode={(mode) => {
+                  setSessionMode(mode);
+                  if (mode === 'domain') {
+                    setActiveTab('full-names-emails');
+                  } else {
+                    setActiveTab(filterSelectedCompany ? 'full-names-emails' : 'industry');
+                  }
+                }}
+                onFocusDomainInput={() => searchInputRef.current?.focus()}
+              />
+            </section>
 
             <WidgetsDrawerBoard
               showWidgetsDrawer={showWidgetsDrawer}
@@ -1802,7 +2146,11 @@ export default function App() {
         </div>
       )}
 
-      <footer className="relative z-10 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8 border-t border-slate-200/70 dark:border-slate-800/70 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400 text-center sm:text-left">
+      <footer
+        className={`relative z-10 max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 pt-8 border-t border-slate-200/70 dark:border-slate-800/70 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400 text-center sm:text-left ${
+          appView === 'workspace' ? 'pb-24 lg:pb-8' : 'pb-8'
+        }`}
+      >
         <span>OrgLens Corporate Directory &amp; Company Explorer</span>
         <div className="flex items-center gap-4">
           <a
@@ -1817,6 +2165,82 @@ export default function App() {
           <span>{publicConfig.companyTagline}</span>
         </div>
       </footer>
+
+      {/* Mobile Thumb-Zone Bottom Navigation Bar (lg:hidden, Workspace Only) */}
+      {appView === 'workspace' && (
+        <nav
+          aria-label="Mobile quick navigation"
+          className="lg:hidden fixed bottom-0 inset-x-0 z-30 h-14 backdrop-blur-xl bg-white/95 dark:bg-[#090d16]/95 border-t border-slate-200/90 dark:border-slate-800/90 px-2 grid grid-cols-4 gap-1"
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setSessionMode('domain');
+              setActiveTab('full-names-emails');
+              scrollToListTop(searchInputRef.current, 100);
+            }}
+            className={`flex flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+              sessionMode === 'domain' && !mobileSidebarOpen
+                ? 'text-sky-600 dark:text-sky-400'
+                : 'text-slate-500 dark:text-slate-400'
+            }`}
+          >
+            <Search className="h-4 w-4" />
+            <span>Domain</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSessionMode('filter');
+              handleBackToCompaniesList();
+            }}
+            className={`flex flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+              sessionMode === 'filter' &&
+              activeTab === 'industry' &&
+              !mobileSidebarOpen
+                ? 'text-sky-600 dark:text-sky-400'
+                : 'text-slate-500 dark:text-slate-400'
+            }`}
+          >
+            <Building2 className="h-4 w-4" />
+            <span>Companies</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('full-names-emails');
+              scrollToListTop(resultsTopRef.current, 80);
+            }}
+            className={`flex flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+              activeTab === 'full-names-emails' &&
+              sessionMode === 'filter' &&
+              !mobileSidebarOpen
+                ? 'text-sky-600 dark:text-sky-400'
+                : 'text-slate-500 dark:text-slate-400'
+            }`}
+          >
+            <Users className="h-4 w-4" />
+            <span>Contacts</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMobileSidebarOpen(true)}
+            className={`relative flex flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+              mobileSidebarOpen || activeFilterCount > 0
+                ? 'text-sky-600 dark:text-sky-400'
+                : 'text-slate-500 dark:text-slate-400'
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span>
+              Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+            </span>
+          </button>
+        </nav>
+      )}
     </div>
   );
 }

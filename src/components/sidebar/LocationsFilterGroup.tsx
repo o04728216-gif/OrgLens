@@ -1,14 +1,25 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Search, X } from 'lucide-react';
-import type { SidebarFiltersState } from '../../types';
+import type { FilterFacetsResponse, SidebarFiltersState } from '../../types';
 import { CONTINENTS_CATALOG } from '../../utils/geographyAndRevenue';
 import { SidebarAccordionCard } from './SidebarAccordionCard';
 import { countEnteredTerms, type AccordionSectionId } from './sidebarConstants';
+
+function formatContinentBadgeCount(count: number): string {
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toFixed(1)}M`;
+  }
+  if (count >= 100_000) {
+    return `${Math.round(count / 1_000)}K`;
+  }
+  return count.toLocaleString();
+}
 
 interface LocationsFilterGroupProps {
   filters: SidebarFiltersState;
   sectionCounts: Record<AccordionSectionId, number>;
   sidebarSearch: string;
+  filterFacets?: FilterFacetsResponse | null;
   isSectionOpen: (id: AccordionSectionId) => boolean;
   onToggleSection: (id: AccordionSectionId) => void;
   onChangeFilters: (
@@ -21,6 +32,7 @@ export const LocationsFilterGroup: React.FC<LocationsFilterGroupProps> = ({
   filters,
   sectionCounts,
   sidebarSearch,
+  filterFacets = null,
   isSectionOpen,
   onToggleSection,
   onChangeFilters,
@@ -187,6 +199,9 @@ export const LocationsFilterGroup: React.FC<LocationsFilterGroupProps> = ({
                     filters.selectedCountries.includes(c.name)
                   ).length;
 
+              const continentCompanyCount =
+                filterFacets?.continentCounts?.[continent.name];
+
               return (
                 <div key={continent.id} className="rounded-md">
                   <div className="flex items-center justify-between gap-1.5 px-1.5 py-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-colors">
@@ -222,13 +237,20 @@ export const LocationsFilterGroup: React.FC<LocationsFilterGroupProps> = ({
                     <button
                       type="button"
                       onClick={() => toggleContinentDropdown(continent.id)}
-                      className={`font-mono tabular-nums text-[11px] cursor-pointer shrink-0 ${
+                      title={
+                        typeof continentCompanyCount === 'number'
+                          ? `${continentCompanyCount.toLocaleString()} companies in ${continent.name}`
+                          : undefined
+                      }
+                      className={`font-mono tabular-nums text-[11px] cursor-pointer shrink-0 whitespace-nowrap ${
                         checkedCountriesCount > 0
                           ? 'font-semibold text-sky-600 dark:text-sky-400'
                           : 'text-slate-400 dark:text-slate-500 hover:text-sky-600 dark:hover:text-sky-400'
                       }`}
                     >
-                      {checkedCountriesCount > 0
+                      {typeof continentCompanyCount === 'number'
+                        ? formatContinentBadgeCount(continentCompanyCount)
+                        : checkedCountriesCount > 0
                         ? `${checkedCountriesCount}/${continent.countries.length}`
                         : continent.countries.length}
                     </button>
@@ -240,39 +262,58 @@ export const LocationsFilterGroup: React.FC<LocationsFilterGroupProps> = ({
                         const cChecked =
                           continentChecked ||
                           filters.selectedCountries.includes(country.name);
+                        const countryCompanyCount =
+                          filterFacets?.countryCounts?.[country.name];
                         return (
                           <label
                             key={country.name}
-                            className="flex items-center gap-2 py-0.5 text-xs text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+                            className={`flex items-center justify-between gap-2 py-0.5 text-xs cursor-pointer ${
+                              cChecked
+                                ? 'text-slate-900 dark:text-white font-semibold'
+                                : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                            }`}
                           >
-                            <input
-                              type="checkbox"
-                              checked={cChecked}
-                              onChange={() => {
-                                if (continentChecked) {
-                                  onChangeFilters((prev) => ({
-                                    ...prev,
-                                    selectedContinents:
-                                      prev.selectedContinents.filter(
-                                        (c) => c !== continent.name
+                            <span className="flex items-center gap-2 min-w-0 overflow-hidden">
+                              <input
+                                type="checkbox"
+                                checked={cChecked}
+                                onChange={() => {
+                                  if (continentChecked) {
+                                    onChangeFilters((prev) => ({
+                                      ...prev,
+                                      selectedContinents:
+                                        prev.selectedContinents.filter(
+                                          (c) => c !== continent.name
+                                        ),
+                                      selectedCountries: Array.from(
+                                        new Set([
+                                          ...prev.selectedCountries,
+                                          ...continent.countries
+                                            .map((ct) => ct.name)
+                                            .filter((n) => n !== country.name),
+                                        ])
                                       ),
-                                    selectedCountries: Array.from(
-                                      new Set([
-                                        ...prev.selectedCountries,
-                                        ...continent.countries
-                                          .map((ct) => ct.name)
-                                          .filter((n) => n !== country.name),
-                                      ])
-                                    ),
-                                  }));
-                                  onActivateCompanyDirectory();
-                                } else {
-                                  handleToggleCountryCheckbox(country.name);
-                                }
-                              }}
-                              className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 shrink-0"
-                            />
-                            <span className="truncate">{country.name}</span>
+                                    }));
+                                    onActivateCompanyDirectory();
+                                  } else {
+                                    handleToggleCountryCheckbox(country.name);
+                                  }
+                                }}
+                                className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 shrink-0"
+                              />
+                              <span className="truncate">{country.name}</span>
+                            </span>
+                            {typeof countryCompanyCount === 'number' && (
+                              <span
+                                className={`font-mono tabular-nums text-[11px] shrink-0 whitespace-nowrap ${
+                                  cChecked
+                                    ? 'text-sky-600 dark:text-sky-400 font-semibold'
+                                    : 'text-slate-400 dark:text-slate-500'
+                                }`}
+                              >
+                                {countryCompanyCount.toLocaleString()}
+                              </span>
+                            )}
                           </label>
                         );
                       })}

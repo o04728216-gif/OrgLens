@@ -11,6 +11,12 @@ import {
 } from '../middleware/authMiddleware.ts';
 import { verifyTronUsdtTransaction } from '../services/tronVerifierService.ts';
 import {
+  getCrawlerStatusSnapshot,
+  runCrawlerCycleNow,
+  setCrawlerDaemonEnabled,
+} from '../services/worldwideCrawlerDaemon.ts';
+import { probeGlobalRegistryFederationTotals } from '../services/worldwideRegistryConnectors.ts';
+import {
   adminCreateUserManually,
   adminCreateVoucher,
   adminDeleteRegisteredDevice,
@@ -42,7 +48,52 @@ adminRouter.get(
     res.json({
       ...store,
       cacheStats: getServerCacheStats(),
+      crawlerStats: getCrawlerStatusSnapshot(),
     });
+  }
+);
+
+adminRouter.get(
+  '/api/admin/crawler/stats',
+  (_req: AuthenticatedRequest, res: Response) => {
+    res.json({ crawlerStats: getCrawlerStatusSnapshot() });
+  }
+);
+
+adminRouter.post(
+  '/api/admin/crawler/run',
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const burstPages = Math.max(
+        1,
+        Math.min(5, Number(req.body?.burstPages || 2))
+      );
+      if (req.body?.refreshFederationTotals) {
+        await probeGlobalRegistryFederationTotals();
+      }
+      const summary = await runCrawlerCycleNow({ burstPages });
+      res.json({
+        ok: true,
+        summary,
+        crawlerStats: getCrawlerStatusSnapshot(),
+      });
+    } catch (err) {
+      res.status(500).json({
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Unable to run crawler cycle.',
+      });
+    }
+  }
+);
+
+adminRouter.post(
+  '/api/admin/crawler/toggle',
+  (req: AuthenticatedRequest, res: Response) => {
+    const enabled = Boolean(req.body?.enabled);
+    const crawlerStats = setCrawlerDaemonEnabled(enabled);
+    res.json({ ok: true, crawlerStats });
   }
 );
 

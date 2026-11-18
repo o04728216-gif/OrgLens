@@ -4,12 +4,14 @@ import {
   Check,
   Copy,
   ExternalLink,
+  Eye,
   Globe2,
   Loader2,
   Users,
 } from 'lucide-react';
 import type {
   FilterExplorerResponse,
+  FilterFacetsResponse,
   GlobalCompaniesResponse,
   GlobalCompanyItem,
   GlobalIndustryOption,
@@ -18,7 +20,6 @@ import type {
   SidebarFiltersState,
 } from '../types';
 import { truncateIndustry20 } from '../utils/emailFormulas';
-import { matchesGeographyFilter } from '../utils/geographyAndRevenue';
 import { copyTextToClipboard } from '../utils/offlineStorage';
 import { scrollToListTop } from '../utils/scrollUtils';
 import { CompanyLogoAvatar } from './directory/CompanyLogoAvatar';
@@ -27,6 +28,11 @@ import {
   PaginationControls,
   PaginationLoadingBanner,
 } from './directory/PaginationControls';
+import {
+  QuickViewModal,
+  type QuickViewTarget,
+} from './directory/QuickViewModal';
+import { SwipeableTableContainer } from './directory/SwipeableTableContainer';
 
 interface IndustryTabProps {
   sessionMode: SessionMode;
@@ -39,13 +45,88 @@ interface IndustryTabProps {
   globalIndustries: GlobalIndustryOption[];
   globalDirectory: GlobalCompaniesResponse | null;
   globalDirectoryLoading: boolean;
+  filterFacets?: FilterFacetsResponse | null;
+  coherentTotalCompanies: number;
   globalPage: number;
   onChangeGlobalPage: (page: number) => void;
   onSelectIndustrySlug: (slug: string | null) => void;
   onSelectGlobalCompany: (company: GlobalCompanyItem) => void;
+  onPrefetchCompany?: (company: GlobalCompanyItem) => void;
   onSelectDomain: (domain: string) => void;
   onSwitchSessionMode: (mode: SessionMode) => void;
   onFocusDomainInput: () => void;
+}
+
+const EMP_SCALE_RANK: Record<string, number> = {
+  '10,000+': 1400,
+  '5,001 - 10,000': 1200,
+  '1,001 - 5,000': 1000,
+  '501 - 1,000': 800,
+  '201 - 500': 600,
+  '51 - 200': 400,
+  '1 - 50': 200,
+};
+
+const REV_SCALE_RANK: Record<string, number> = {
+  '$10B+': 900,
+  '$1B - $10B': 780,
+  '$500M - $1B': 660,
+  '$100M - $500M': 540,
+  '$50M - $100M': 420,
+  '$10M - $50M': 300,
+  '$1M - $10M': 180,
+  'Under $1M': 90,
+};
+
+function computeClientRelevanceScore(
+  comp: GlobalCompanyItem,
+  upstreamIdx: number,
+  filters: SidebarFiltersState
+): number {
+  let score = 0;
+  const nameQ = filters.companyNameFilter.trim().toLowerCase();
+  const indKw = filters.industryKeyword.trim().toLowerCase();
+  const locQ = filters.locationQuery.trim().toLowerCase();
+  const nameLower = comp.name.toLowerCase();
+  const domLower = (comp.domain || '').toLowerCase();
+
+  if (nameQ) {
+    if (nameLower === nameQ || domLower === nameQ || domLower === `${nameQ}.com`) {
+      score += 60_000;
+    } else if (nameLower.startsWith(nameQ) || domLower.startsWith(nameQ)) {
+      score += 30_000;
+    } else if (nameLower.includes(nameQ) || domLower.includes(nameQ)) {
+      score += 12_000;
+    }
+  }
+  if (indKw) {
+    const indLower = comp.industry.toLowerCase();
+    if (indLower.startsWith(indKw)) score += 8_000;
+    else if (indLower.includes(indKw)) score += 4_000;
+  }
+  if (locQ && comp.location.toLowerCase().includes(locQ)) {
+    score += 3_000;
+  }
+
+  score += Math.min(8_000, (comp.confirmedEmailCount || 0) * 180);
+  if (comp.patternConfidence) score += comp.patternConfidence * 6;
+  if (comp.logoUrl) score += 2_200;
+  score += EMP_SCALE_RANK[comp.employeeRange] || 150;
+  score += REV_SCALE_RANK[comp.revenueRange] || 90;
+  score += Math.max(0, 500 - upstreamIdx);
+  return score;
+}
+
+function formatCompactCatalogTotal(count: number): string {
+  if (!Number.isFinite(count) || count <= 0) return '';
+  if (count >= 1_000_000) {
+    const millions = count / 1_000_000;
+    return `${millions >= 10 ? millions.toFixed(1) : millions.toFixed(2)}M`;
+  }
+  if (count >= 1_000) {
+    return `${(count / 1_000).toFixed(1)}K`;
+  }
+  return count.toLocaleString();
 }
 
 export const IndustryTab: React.FC<IndustryTabProps> = ({
@@ -59,10 +140,13 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   globalIndustries,
   globalDirectory,
   globalDirectoryLoading,
+  filterFacets = null,
+  coherentTotalCompanies,
   globalPage,
   onChangeGlobalPage,
   onSelectIndustrySlug,
   onSelectGlobalCompany,
+  onPrefetchCompany,
   onSelectDomain,
   onSwitchSessionMode,
   onFocusDomainInput,
@@ -78,6 +162,9 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
     number | null
   >(null);
   const [requestedPage, setRequestedPage] = useState<number | null>(null);
+  const [quickViewTarget, setQuickViewTarget] = useState<QuickViewTarget | null>(
+    null
+  );
   const listTopRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -98,22 +185,26 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   };
 
   const activeDirectorySource = useMemo(() => {
-    if (filterResult) {
-      return {
-        title: filterResult.scopeTitle,
-        page: filterResult.page,
-        totalPages: filterResult.totalPages,
-        totalCompanies: filterResult.totalMatchedCompanies,
-        companies: filterResult.companies,
-      };
-    }
     if (globalDirectory) {
       return {
         title: globalDirectory.industryFullTitle,
         page: globalDirectory.page,
         totalPages: globalDirectory.totalPages,
         totalCompanies: globalDirectory.totalCompanies,
+        liveFederatedTotal: globalDirectory.liveFederatedCatalogTotal,
+        vaultCount: globalDirectory.vaultCompaniesCount,
         companies: globalDirectory.companies,
+      };
+    }
+    if (filterResult) {
+      return {
+        title: filterResult.scopeTitle,
+        page: filterResult.page,
+        totalPages: filterResult.totalPages,
+        totalCompanies: filterResult.totalMatchedCompanies,
+        liveFederatedTotal: filterResult.liveFederatedCatalogTotal,
+        vaultCount: filterResult.vaultCompaniesCount,
+        companies: filterResult.companies,
       };
     }
     return null;
@@ -121,108 +212,102 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
 
   const filteredGlobalCompanies = useMemo(() => {
     if (!activeDirectorySource) return [];
-    const nameQ = filters.companyNameFilter.trim().toLowerCase();
-    const indKw = filters.industryKeyword.trim().toLowerCase();
-
-    const list = activeDirectorySource.companies.filter((comp) => {
-      if (nameQ && !comp.name.toLowerCase().includes(nameQ)) {
-        return false;
-      }
-      if (
-        indKw &&
-        !comp.industry.toLowerCase().includes(indKw) &&
-        !comp.name.toLowerCase().includes(indKw)
-      ) {
-        return false;
-      }
-      if (
-        filters.employeeRanges.length > 0 &&
-        !filters.employeeRanges.includes(comp.employeeRange)
-      ) {
-        return false;
-      }
-      if (
-        filters.revenueRanges.length > 0 &&
-        !filters.revenueRanges.includes(comp.revenueRange)
-      ) {
-        return false;
-      }
-      if (
-        !matchesGeographyFilter(
-          comp.location,
-          filters.selectedContinents,
-          filters.selectedCountries,
-          filters.locationQuery,
-          comp.sourceCountrySlug
-        )
-      ) {
-        return false;
-      }
-      return true;
-    });
+    // Keep ONLY companies with real verified domains — never synthesize slug.com
+    const realDomainRows = activeDirectorySource.companies.filter((comp) =>
+      Boolean(comp.domain && comp.domain.includes('.'))
+    );
 
     const sorted =
       sortBy === 'name-asc'
-        ? [...list].sort((a, b) => a.name.localeCompare(b.name))
+        ? [...realDomainRows].sort((a, b) => a.name.localeCompare(b.name))
         : sortBy === 'website-asc'
-        ? [...list].sort((a, b) =>
-            (a.domain || `${a.slug}.com`).localeCompare(
-              b.domain || `${b.slug}.com`
-            )
+        ? [...realDomainRows].sort((a, b) =>
+            (a.domain || '').localeCompare(b.domain || '')
           )
         : sortBy === 'location'
-        ? [...list].sort((a, b) => a.location.localeCompare(b.location))
-        : list;
+        ? [...realDomainRows].sort((a, b) =>
+            a.location.localeCompare(b.location)
+          )
+        : realDomainRows
+            .map((comp, idx) => ({
+              comp,
+              rel: computeClientRelevanceScore(comp, idx, filters),
+            }))
+            .sort(
+              (a, b) => b.rel - a.rel || a.comp.name.localeCompare(b.comp.name)
+            )
+            .map((entry) => entry.comp);
 
     return sorted.slice(0, 500);
   }, [
     activeDirectorySource,
+    sortBy,
     filters.companyNameFilter,
     filters.industryKeyword,
-    filters.employeeRanges,
-    filters.revenueRanges,
-    filters.selectedContinents,
-    filters.selectedCountries,
     filters.locationQuery,
-    sortBy,
   ]);
 
-  const coherentTotalCompanies = useMemo(() => {
-    if (!activeDirectorySource) return 0;
-    if (filteredGlobalCompanies.length === 0) return 0;
-    if (globalPage === 1 && filteredGlobalCompanies.length < 500) {
-      return filteredGlobalCompanies.length;
+  const effectiveTotalCompanies = useMemo(() => {
+    if (coherentTotalCompanies > 0) return coherentTotalCompanies;
+    if (filterFacets) return filterFacets.totalMatchedCompanies;
+    if (activeDirectorySource) return activeDirectorySource.totalCompanies;
+    return 0;
+  }, [coherentTotalCompanies, filterFacets, activeDirectorySource]);
+
+  const hasNonIndustryScopeFilters = Boolean(
+    filters.selectedContinents.length > 0 ||
+      filters.selectedCountries.length > 0 ||
+      filters.employeeRanges.length > 0 ||
+      filters.revenueRanges.length > 0 ||
+      filters.companyNameFilter.trim() ||
+      filters.locationQuery.trim() ||
+      filters.industryKeyword.trim()
+  );
+
+  const allPillCount = useMemo(() => {
+    if (!hasNonIndustryScopeFilters) {
+      return (
+        filterFacets?.liveFederatedCatalogTotal ||
+        filterResult?.liveFederatedCatalogTotal ||
+        globalDirectory?.liveFederatedCatalogTotal ||
+        effectiveTotalCompanies
+      );
     }
-    return Math.max(
-      (globalPage - 1) * 500 + filteredGlobalCompanies.length,
-      activeDirectorySource.totalCompanies
-    );
-  }, [activeDirectorySource, filteredGlobalCompanies.length, globalPage]);
+    if (filters.selectedIndustrySlugs.length === 0) {
+      return effectiveTotalCompanies;
+    }
+    return effectiveTotalCompanies;
+  }, [
+    hasNonIndustryScopeFilters,
+    filters.selectedIndustrySlugs.length,
+    filterFacets?.liveFederatedCatalogTotal,
+    filterResult?.liveFederatedCatalogTotal,
+    globalDirectory?.liveFederatedCatalogTotal,
+    effectiveTotalCompanies,
+  ]);
 
   const coherentTotalPages = useMemo(() => {
-    if (coherentTotalCompanies === 0) return 1;
+    if (effectiveTotalCompanies === 0) return 1;
     return Math.max(
       1,
-      Math.min(2000, Math.ceil(coherentTotalCompanies / 500))
+      Math.min(20000, Math.ceil(effectiveTotalCompanies / 500))
     );
-  }, [coherentTotalCompanies]);
+  }, [effectiveTotalCompanies]);
 
   const topIndustriesQuickBar = useMemo(
     () => globalIndustries.slice(0, 8),
     [globalIndustries]
   );
 
-  const isDirectoryBusy =
-    (isFilterLoading && !filterResult) ||
-    (globalDirectoryLoading && !activeDirectorySource);
+  const isDirectoryBusy = globalDirectoryLoading && !activeDirectorySource;
 
   const isPaginationLoading =
     !isDirectoryBusy &&
-    (isFilterLoading || globalDirectoryLoading) &&
     (requestedPage !== null ||
-      Boolean(
-        activeDirectorySource && activeDirectorySource.page !== globalPage
-      ));
+      (globalDirectoryLoading &&
+        Boolean(
+          activeDirectorySource && activeDirectorySource.page !== globalPage
+        )));
 
   const targetPaginationPage = requestedPage ?? globalPage;
 
@@ -250,29 +335,26 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
     );
   }
 
+  const compactAllScopeLabel = formatCompactCatalogTotal(allPillCount);
+
   return (
     <div ref={listTopRef} className="space-y-4 scroll-mt-24">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/80 dark:border-slate-800/80">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white min-w-0">
+        <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white min-w-0">
           <Globe2 className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0" />
           <span>Filter Explorer · Worldwide Companies</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 text-xs shrink-0">
-          {(isFilterLoading || globalDirectoryLoading) && (
-            <span className="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400 font-semibold">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {isPaginationLoading
-                ? `Loading page ${targetPaginationPage.toLocaleString()}...`
-                : 'Updating...'}
-            </span>
-          )}
-
-          {activeDirectorySource && (
+          {(activeDirectorySource || filterFacets) && (
             <span className="font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
-              Showing {filteredGlobalCompanies.length.toLocaleString()} on page{' '}
-              {activeDirectorySource.page.toLocaleString()} (500/page) ·{' '}
-              {coherentTotalCompanies.toLocaleString()} matching
+              {activeDirectorySource
+                ? `Showing ${filteredGlobalCompanies.length.toLocaleString()} on page ${activeDirectorySource.page.toLocaleString()} (500/page) · `
+                : `Page ${globalPage.toLocaleString()} (500/page) · `}
+              <strong className="font-semibold text-slate-800 dark:text-slate-200">
+                {effectiveTotalCompanies.toLocaleString()}
+              </strong>{' '}
+              matching
             </span>
           )}
 
@@ -292,7 +374,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                 )
               }
               aria-label="Sort companies"
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+              className="min-h-[38px] sm:min-h-0 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
             >
               <option value="relevance">Relevance</option>
               <option value="name-asc">Company Name (A–Z)</option>
@@ -322,7 +404,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                   );
                 }
               }}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              className={`min-h-[42px] sm:min-h-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 copiedAllCompaniesCount !== null
                   ? 'bg-emerald-600 text-white'
                   : 'bg-sky-600 hover:bg-sky-500 text-white shadow-xs'
@@ -345,10 +427,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
               type="button"
               onClick={async () => {
                 const text = filteredGlobalCompanies
-                  .map(
-                    (c) =>
-                      c.websiteUrl || `https://${c.domain || `${c.slug}.com`}`
-                  )
+                  .map((c) => c.websiteUrl || (c.domain ? `https://${c.domain}` : ''))
+                  .filter(Boolean)
                   .join('\n');
                 const ok = await copyTextToClipboard(text);
                 if (ok) {
@@ -359,7 +439,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                   );
                 }
               }}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              className={`min-h-[42px] sm:min-h-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 copiedAllWebsitesCount !== null
                   ? 'border-emerald-600 bg-emerald-600 text-white'
                   : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700'
@@ -380,7 +460,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
           </div>
 
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            Copy any company or website first, or click a company name to view Full Names &amp; Emails
+            Copy any company or website first, or tap a company to reveal Full Names &amp; Emails
           </span>
         </div>
       )}
@@ -391,40 +471,48 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
           <button
             type="button"
             onClick={() => onSelectIndustrySlug(null)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+            className={`min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               filters.selectedIndustrySlugs.length === 0
                 ? 'border-sky-600 bg-sky-600 text-white'
                 : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-300 hover:border-sky-500/40'
             }`}
           >
-            <span>All Worldwide</span>
-            <span
-              className={`ml-1.5 font-mono tabular-nums ${
-                filters.selectedIndustrySlugs.length === 0
-                  ? 'text-sky-100'
-                  : 'text-slate-400 dark:text-slate-500'
-              }`}
-            >
-              3.5M+
+            <span>
+              {hasNonIndustryScopeFilters ? 'All Industries' : 'All Worldwide'}
             </span>
+            {compactAllScopeLabel &&
+              (!hasNonIndustryScopeFilters ||
+                filters.selectedIndustrySlugs.length === 0) && (
+                <span
+                  className={`ml-1.5 font-mono tabular-nums ${
+                    filters.selectedIndustrySlugs.length === 0
+                      ? 'text-sky-100'
+                      : 'text-slate-400 dark:text-slate-500'
+                  }`}
+                >
+                  {compactAllScopeLabel}
+                </span>
+              )}
           </button>
 
           {topIndustriesQuickBar.map((ind) => {
             const active = filters.selectedIndustrySlugs.includes(ind.slug);
+            const liveCount =
+              filterFacets?.industryCounts?.[ind.slug] ?? ind.companyCount;
             return (
               <button
                 key={ind.slug}
                 type="button"
                 title={ind.fullTitle}
                 onClick={() => onSelectIndustrySlug(ind.slug)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                className={`min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   active
                     ? 'border-sky-600 bg-sky-600 text-white'
                     : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-300 hover:border-sky-500/40'
                 }`}
               >
                 <span>{truncateIndustry20(ind.fullTitle)}</span>
-                {ind.companyCount > 0 && (
+                {liveCount >= 0 && (
                   <span
                     className={`ml-1.5 font-mono tabular-nums ${
                       active
@@ -432,7 +520,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                         : 'text-slate-400 dark:text-slate-500'
                     }`}
                   >
-                    {ind.companyCount.toLocaleString()}
+                    {liveCount.toLocaleString()}
                   </span>
                 )}
               </button>
@@ -441,18 +529,11 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
         </div>
       )}
 
-      {isPaginationLoading && (
-        <PaginationLoadingBanner
-          message={`Loading page ${targetPaginationPage.toLocaleString()} of ${coherentTotalPages.toLocaleString()}...`}
-          rightMeta="Fetching next 500 companies"
-        />
-      )}
-
-      {/* Worldwide Companies HTML <table> */}
+      {/* Worldwide Companies: Mobile Touch Cards (md:hidden) + Desktop HTML <table> (hidden md:block) */}
       {isDirectoryBusy ? (
         <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80">
           <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
-          <span>Auto-loading matching worldwide companies...</span>
+          <span>Loading matching worldwide companies...</span>
         </div>
       ) : filteredGlobalCompanies.length === 0 ? (
         <div className="py-10 px-4 text-center rounded-xl border border-slate-200/80 dark:border-slate-800/80">
@@ -464,28 +545,155 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
           </p>
         </div>
       ) : (
-        <div className="relative rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/65 dark:bg-slate-950/40">
+        <div className="space-y-3">
           {isPaginationLoading && (
-            <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex justify-center px-4">
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl backdrop-blur-md bg-white/95 dark:bg-slate-900/95 border border-sky-500/40 shadow-sm text-xs font-semibold text-slate-900 dark:text-white">
-                <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
-                <span>
-                  Loading page {targetPaginationPage.toLocaleString()}...
-                </span>
-              </div>
-            </div>
+            <PaginationLoadingBanner
+              message={`Loading page ${targetPaginationPage.toLocaleString()} of ${coherentTotalPages.toLocaleString()}...`}
+              rightMeta="Fetching 500 companies on demand"
+            />
           )}
           <div
-            className={`overflow-x-auto rounded-xl transition-opacity duration-150 ${
-              isPaginationLoading
-                ? 'opacity-45 pointer-events-none'
-                : 'opacity-100'
+            aria-busy={isPaginationLoading}
+            className={`relative transition-opacity duration-150 ${
+              isPaginationLoading ? 'opacity-55 pointer-events-none' : ''
             }`}
           >
+            {/* Mobile Touch Cards (md:hidden) */}
+            <div className="md:hidden space-y-2.5">
+            {filteredGlobalCompanies.map((comp) => {
+              const companyDomain = comp.domain || '';
+              const websiteHref =
+                comp.websiteUrl ||
+                (companyDomain ? `https://${companyDomain}` : '');
+              const nameCopyId = `name:${comp.id}`;
+              const webCopyId = `web:${comp.id}`;
+              const isNameCopied = copiedKey === nameCopyId;
+              const isWebCopied = copiedKey === webCopyId;
+
+              return (
+                <div
+                  key={comp.id}
+                  className="rounded-xl p-3.5 border border-slate-200/85 dark:border-slate-800/85 bg-white/85 dark:bg-slate-950/55 space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <CompanyLogoAvatar
+                        name={comp.name}
+                        logoUrl={comp.logoUrl}
+                      />
+                      <div className="min-w-0">
+                        <button
+                          type="button"
+                          onTouchStart={() => onPrefetchCompany?.(comp)}
+                          onClick={() => onSelectGlobalCompany(comp)}
+                          className="font-semibold text-sm text-left text-slate-900 dark:text-white hover:text-sky-600 dark:hover:text-sky-400 hover:underline leading-snug cursor-pointer"
+                        >
+                          {comp.name}
+                        </button>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
+                          <a
+                            href={websiteHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-mono text-sky-700 dark:text-sky-400 inline-flex items-center gap-1"
+                          >
+                            <span className="truncate max-w-[180px]">
+                              {companyDomain}
+                            </span>
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-slate-600 dark:text-slate-300 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span>{comp.location}</span>
+                    {comp.industry && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>{truncateIndustry20(comp.industry)}</span>
+                      </>
+                    )}
+                    {comp.employeeRange && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono tabular-nums">
+                          {comp.employeeRange} emp
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => void triggerRowCopy(nameCopyId, comp.name)}
+                      className={`min-h-[40px] inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${
+                        isNameCopied
+                          ? 'border-emerald-600 bg-emerald-600 text-white'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200'
+                      }`}
+                    >
+                      {isNameCopied ? (
+                        <Check className="h-3.5 w-3.5 shrink-0" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5 shrink-0" />
+                      )}
+                      <span>{isNameCopied ? 'Copied' : 'Name'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void triggerRowCopy(webCopyId, websiteHref)
+                      }
+                      className={`min-h-[40px] inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${
+                        isWebCopied
+                          ? 'border-emerald-600 bg-emerald-600 text-white'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200'
+                      }`}
+                    >
+                      {isWebCopied ? (
+                        <Check className="h-3.5 w-3.5 shrink-0" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5 shrink-0" />
+                      )}
+                      <span>{isWebCopied ? 'Copied' : 'Web'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setQuickViewTarget({ kind: 'company', company: comp })
+                      }
+                      className="min-h-[40px] inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200 cursor-pointer"
+                    >
+                      <Eye className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
+                      <span>Quick</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onTouchStart={() => onPrefetchCompany?.(comp)}
+                      onClick={() => onSelectGlobalCompany(comp)}
+                      className="min-h-[40px] inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+                    >
+                      <Users className="h-3.5 w-3.5 shrink-0" />
+                      <span>Emails</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop Compact & Seamlessly Swipeable Table (hidden md:block) */}
+          <SwipeableTableContainer compactHint="Drag left/right, Shift+Scroll, or use arrows to swipe all company columns">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/80 dark:bg-slate-900/80 text-xs font-semibold text-slate-600 dark:text-slate-300">
-                  <th scope="col" className="py-3 px-4 whitespace-nowrap">
+                <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/80 dark:bg-slate-900/80 text-[11px] uppercase tracking-wide font-semibold text-slate-600 dark:text-slate-300">
+                  <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                     <button
                       type="button"
                       onClick={() =>
@@ -499,7 +707,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                       <ArrowUpDown className="h-3 w-3 opacity-60" />
                     </button>
                   </th>
-                  <th scope="col" className="py-3 px-4 whitespace-nowrap">
+                  <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                     <button
                       type="button"
                       onClick={() =>
@@ -513,7 +721,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                       <ArrowUpDown className="h-3 w-3 opacity-60" />
                     </button>
                   </th>
-                  <th scope="col" className="py-3 px-4 whitespace-nowrap">
+                  <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                     <button
                       type="button"
                       onClick={() =>
@@ -523,38 +731,39 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                       }
                       className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-white cursor-pointer"
                     >
-                      <span>City, State / Country</span>
+                      <span>Location</span>
                       <ArrowUpDown className="h-3 w-3 opacity-60" />
                     </button>
                   </th>
-                  <th scope="col" className="py-3 px-4 whitespace-nowrap">
+                  <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                     Industry
                   </th>
                   <th
                     scope="col"
-                    className="py-3 px-4 text-right whitespace-nowrap"
+                    className="py-2.5 px-3 text-right whitespace-nowrap"
                   >
-                    Employees
+                    Staff
                   </th>
                   <th
                     scope="col"
-                    className="py-3 px-4 text-right whitespace-nowrap"
+                    className="py-2.5 px-3 text-right whitespace-nowrap"
                   >
                     Revenue
                   </th>
                   <th
                     scope="col"
-                    className="py-3 px-4 text-right whitespace-nowrap"
+                    className="py-2.5 px-3 text-right whitespace-nowrap"
                   >
-                    Names &amp; Emails
+                    QuickView &amp; Emails
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm">
+              <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs sm:text-sm">
                 {filteredGlobalCompanies.map((comp) => {
-                  const companyDomain = comp.domain || `${comp.slug}.com`;
+                  const companyDomain = comp.domain || '';
                   const websiteHref =
-                    comp.websiteUrl || `https://${companyDomain}`;
+                    comp.websiteUrl ||
+                    (companyDomain ? `https://${companyDomain}` : '');
                   const nameCopyId = `name:${comp.id}`;
                   const webCopyId = `web:${comp.id}`;
                   const isNameCopied = copiedKey === nameCopyId;
@@ -565,8 +774,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                       key={comp.id}
                       className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
                     >
-                      <td className="py-2.5 px-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2.5">
+                      <td className="py-2 px-3 whitespace-nowrap max-w-[230px]">
+                        <div className="flex items-center gap-2 min-w-0">
                           <CompanyLogoAvatar
                             name={comp.name}
                             logoUrl={comp.logoUrl}
@@ -591,26 +800,29 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                               <Copy className="h-3 w-3" />
                             )}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const selectedText = window
-                                .getSelection()
-                                ?.toString()
-                                .trim();
-                              if (selectedText) return;
-                              onSelectGlobalCompany(comp);
-                            }}
-                            title={`Click to view all Full Names & Emails at ${comp.name}`}
-                            className="font-semibold text-left text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 hover:underline underline-offset-4 transition-colors cursor-pointer select-text"
-                          >
-                            {comp.name}
-                          </button>
+                          <div className="min-w-0 truncate">
+                            <button
+                              type="button"
+                              onMouseEnter={() => onPrefetchCompany?.(comp)}
+                              onClick={() => {
+                                const selectedText = window
+                                  .getSelection()
+                                  ?.toString()
+                                  .trim();
+                                if (selectedText) return;
+                                onSelectGlobalCompany(comp);
+                              }}
+                              title={comp.name}
+                              className="font-semibold text-left text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 hover:underline underline-offset-4 transition-colors cursor-pointer select-text truncate max-w-[145px] block"
+                            >
+                              {comp.name}
+                            </button>
+                          </div>
                         </div>
                       </td>
 
-                      <td className="py-2.5 px-4 whitespace-nowrap">
-                        <div className="inline-flex items-center gap-1.5 font-mono text-xs">
+                      <td className="py-2 px-3 whitespace-nowrap max-w-[185px]">
+                        <div className="inline-flex items-center gap-1.5 font-mono text-xs min-w-0">
                           <button
                             type="button"
                             onClick={(e) => {
@@ -631,36 +843,37 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                               <Copy className="h-3 w-3" />
                             )}
                           </button>
-                          <div>
-                            <a
-                              href={websiteHref}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => {
-                                const selectedText = window
-                                  .getSelection()
-                                  ?.toString()
-                                  .trim();
-                                if (selectedText) {
-                                  e.preventDefault();
-                                }
-                              }}
-                              title={`Visit ${websiteHref}`}
-                              className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 hover:text-sky-500 dark:hover:text-sky-300 hover:underline underline-offset-4 select-text"
-                            >
-                              <span>{companyDomain}</span>
-                              <ExternalLink className="h-3 w-3 opacity-75 shrink-0" />
-                            </a>
-                          </div>
+                          <a
+                            href={websiteHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => {
+                              const selectedText = window
+                                .getSelection()
+                                ?.toString()
+                                .trim();
+                              if (selectedText) {
+                                e.preventDefault();
+                              }
+                            }}
+                            title={`Visit ${websiteHref}`}
+                            className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 hover:text-sky-500 dark:hover:text-sky-300 hover:underline underline-offset-4 select-text truncate max-w-[130px]"
+                          >
+                            <span className="truncate">{companyDomain}</span>
+                            <ExternalLink className="h-3 w-3 opacity-75 shrink-0" />
+                          </a>
                         </div>
                       </td>
 
-                      <td className="py-2.5 px-4 text-xs sm:text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                        {comp.location}
+                      <td
+                        className="py-2 px-3 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap max-w-[165px]"
+                        title={comp.location}
+                      >
+                        <span className="block truncate">{comp.location}</span>
                       </td>
 
                       <td
-                        className="py-2.5 px-4 text-xs sm:text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap"
+                        className="py-2 px-3 text-xs text-slate-700 dark:text-slate-300 whitespace-nowrap max-w-[160px]"
                         title={comp.industry}
                       >
                         <span className="block whitespace-nowrap truncate">
@@ -668,29 +881,50 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                         </span>
                       </td>
 
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-nowrap">
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-xs text-slate-700 dark:text-slate-200 whitespace-nowrap">
                         {comp.employeeRange}
                       </td>
 
-                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-xs sm:text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
                         {comp.revenueRange}
                       </td>
 
-                      <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => onSelectGlobalCompany(comp)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-500/10 hover:bg-sky-600 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
-                        >
-                          <Users className="h-3.5 w-3.5" />
-                          <span>View Emails</span>
-                        </button>
+                      <td className="py-2 px-3 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onMouseEnter={() => onPrefetchCompany?.(comp)}
+                            onClick={() =>
+                              setQuickViewTarget({
+                                kind: 'company',
+                                company: comp,
+                              })
+                            }
+                            title={`QuickView ${comp.name}`}
+                            aria-label={`QuickView ${comp.name}`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 text-slate-700 dark:text-slate-200 hover:border-sky-500/50 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer whitespace-nowrap"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            <span>Quick</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onMouseEnter={() => onPrefetchCompany?.(comp)}
+                            onClick={() => onSelectGlobalCompany(comp)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-500/10 hover:bg-sky-600 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+                          >
+                            <Users className="h-3.5 w-3.5" />
+                            <span>Emails</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </SwipeableTableContainer>
           </div>
         </div>
       )}
@@ -702,9 +936,17 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
           isLoading={isPaginationLoading}
           targetPage={targetPaginationPage}
           perPageLabel="500/page"
+          loadingLabel={`Loading page ${targetPaginationPage.toLocaleString()}...`}
           onSelectPage={handleSelectPage}
         />
       )}
+
+      <QuickViewModal
+        target={quickViewTarget}
+        allSnapshots={allSnapshots}
+        onClose={() => setQuickViewTarget(null)}
+        onOpenFullCompany={onSelectGlobalCompany}
+      />
     </div>
   );
 };

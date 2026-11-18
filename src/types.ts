@@ -20,7 +20,20 @@ export type DiscoverySource =
   | 'Org Chart'
   | 'LinkedIn Index'
   | 'Company Site'
-  | 'Public Web Verified';
+  | 'Public Web Verified'
+  | 'GitHub Commit'
+  | 'OpenPGP Keyserver'
+  | 'NPM Registry'
+  | 'Business Registry';
+
+export type ConfirmedEmailSource =
+  | 'Company Website'
+  | 'GitHub Commit'
+  | 'OpenPGP Keyserver'
+  | 'NPM Registry'
+  | 'Public Web Index'
+  | 'Business Registry'
+  | 'Admin Verified';
 
 export interface EmailPatternAnalysis {
   detectedFormulaId: EmailFormulaId;
@@ -44,6 +57,8 @@ export interface EmployeeRecord {
   emailFormulaId?: EmailFormulaId;
   emailFormulaLabel?: string;
   emailVerifiedOnWeb?: boolean;
+  emailSource?: ConfirmedEmailSource;
+  emailSourceUrl?: string;
   jobTitle: string;
   industry: string;
   department: DepartmentCategory;
@@ -77,6 +92,7 @@ export interface SearchResponse {
   revenueRange?: string;
   emailPattern: EmailPatternAnalysis;
   sourcesUsed: DiscoverySource[];
+  confirmedEmailsCount?: number;
   fetchedAt: string;
   durationMs: number;
   cached: boolean;
@@ -109,6 +125,8 @@ export interface GlobalCompanyItem {
   patternConfidence?: number;
   sourceCountrySlug?: string;
   sourceIndustrySlugs?: string[];
+  sourceRegistry?: string;
+  confirmedEmailCount?: number;
 }
 
 export interface GlobalCompaniesResponse {
@@ -119,6 +137,8 @@ export interface GlobalCompaniesResponse {
   totalCompanies: number;
   totalPages: number;
   companies: GlobalCompanyItem[];
+  vaultCompaniesCount?: number;
+  liveFederatedCatalogTotal?: number;
 }
 
 export interface FilterExplorerResponse {
@@ -126,6 +146,9 @@ export interface FilterExplorerResponse {
   totalMatchedCompanies: number;
   totalMatchedContacts: number;
   sampledCompaniesCount: number;
+  confirmedEmailsCount?: number;
+  vaultCompaniesCount?: number;
+  liveFederatedCatalogTotal?: number;
   page: number;
   totalPages: number;
   companies: GlobalCompanyItem[];
@@ -135,6 +158,21 @@ export interface FilterExplorerResponse {
   fetchedAt: string;
   emailsMaskedForZeroCoins?: boolean;
 }
+
+export interface FilterFacetsResponse {
+  scopeTitle: string;
+  totalMatchedCompanies: number;
+  totalMatchedContacts: number;
+  vaultCompaniesCount: number;
+  liveFederatedCatalogTotal: number;
+  industryCounts: Record<string, number>;
+  countryCounts: Record<string, number>;
+  continentCounts: Record<string, number>;
+  employeeRangeCounts: Record<string, number>;
+  revenueRangeCounts: Record<string, number>;
+  computedAt: string;
+}
+
 
 export interface SidebarFiltersState {
   contactSearch: string;
@@ -180,4 +218,3 @@ export interface WidgetConfig {
 }
 
 export type * from './types/platformTypes.ts';
-

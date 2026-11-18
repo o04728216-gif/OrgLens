@@ -30,6 +30,7 @@ export interface UrlRoutedState {
 
 const VALID_ADMIN_SECTIONS = new Set<AdminSectionId>([
   'overview',
+  'crawler',
   'users',
   'devices',
   'payments',

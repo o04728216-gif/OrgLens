@@ -28,6 +28,7 @@ export function applyManualOverrideToSearchResponse(
   if (override.blocked) {
     return {
       ...result,
+      confirmedEmailsCount: 0,
       employees: [],
       departmentBreakdown: [],
       seniorityBreakdown: [],
@@ -114,6 +115,7 @@ export function applyManualOverrideToSearchResponse(
         emailFormulaId: emailPattern.detectedFormulaId,
         emailFormulaLabel: 'Admin Verified',
         emailVerifiedOnWeb: true,
+        emailSource: 'Admin Verified',
         jobTitle: custom.jobTitle,
         industry,
         department: custom.department,
@@ -137,6 +139,10 @@ export function applyManualOverrideToSearchResponse(
     rank: idx + 1,
   }));
 
+  const confirmedEmailsCount = updatedEmployees.filter(
+    (e) => e.emailVerifiedOnWeb
+  ).length;
+
   const { departmentBreakdown, seniorityBreakdown } =
     computeBreakdowns(updatedEmployees);
 
@@ -151,6 +157,7 @@ export function applyManualOverrideToSearchResponse(
     employeeRange,
     revenueRange,
     emailPattern,
+    confirmedEmailsCount,
     employees: updatedEmployees,
     departmentBreakdown,
     seniorityBreakdown,
@@ -208,6 +215,8 @@ export function applyOverridesAndZeroCoinMaskToFilterExplorer(
     ...payload,
     companies: filteredCompanies,
     employees: filteredEmployees,
+    confirmedEmailsCount: filteredEmployees.filter((e) => e.emailVerifiedOnWeb)
+      .length,
     emailsMaskedForZeroCoins: maskEmailsForZeroCoins,
   };
 }

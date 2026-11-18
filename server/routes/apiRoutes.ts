@@ -8,11 +8,13 @@ import {
 import { discoverDomainEmployees } from '../services/domainDiscoveryService.ts';
 import { buildFilterExplorerResponse } from '../services/filterExplorerService.ts';
 import {
+  computeFilterFacetsAndTotals,
   fetchGlobalIndustries,
   parseGlobalFilterParams,
   resolveFilteredGlobalCompanies,
 } from '../services/globalDirectoryService.ts';
 import { applyOverridesAndZeroCoinMaskToFilterExplorer } from '../services/manualOverrideApplier.ts';
+import { getCrawlerStatusSnapshot } from '../services/worldwideCrawlerDaemon.ts';
 import {
   assertUserCanSearchCompany,
   computeHasActiveUnlimited,
@@ -33,6 +35,22 @@ apiRouter.use(authAndBillingRouter);
 apiRouter.use(adminRouter);
 
 apiRouter.get(
+  '/api/crawler/public-stats',
+  requireAuth,
+  (_req: AuthenticatedRequest, res: Response) => {
+    const snap = getCrawlerStatusSnapshot();
+    res.json({
+      vaultCompaniesCount: snap.vaultCompaniesCount,
+      confirmedContactsCount: snap.confirmedContactsCount,
+      confirmedDomainsCount: snap.confirmedDomainsCount,
+      liveFederatedCatalogTotal: snap.liveFederatedCatalogTotal,
+      daemonRunning: snap.daemonRunning,
+      lastCycleAt: snap.lastCycleAt,
+    });
+  }
+);
+
+apiRouter.get(
   '/api/industries',
   requireAuth,
   async (_req: AuthenticatedRequest, res: Response) => {
@@ -43,6 +61,48 @@ apiRouter.get(
       res.status(500).json({
         error:
           err instanceof Error ? err.message : 'Failed to load industries.',
+      });
+    }
+  }
+);
+
+apiRouter.get(
+  '/api/filter-facets',
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const params = parseGlobalFilterParams(req);
+      const seniorities = String(req.query.seniorities || '')
+        .split('|')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const departments = String(req.query.departments || '')
+        .split('|')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const minAccuracy = Math.max(
+        0,
+        parseInt(String(req.query.minAccuracy || '50'), 10) || 50
+      );
+      const maxAccuracy = Math.min(
+        100,
+        parseInt(String(req.query.maxAccuracy || '99'), 10) || 99
+      );
+      const facets = await computeFilterFacetsAndTotals(params, {
+        contactSearch: String(req.query.contactSearch || '').trim(),
+        roleKeyword: String(req.query.roleKeyword || '').trim(),
+        senioritiesCount: seniorities.length,
+        departmentsCount: departments.length,
+        minAccuracy,
+        maxAccuracy,
+      });
+      res.json(facets);
+    } catch (err) {
+      res.status(500).json({
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Failed to compute filter facets.',
       });
     }
   }
@@ -90,6 +150,34 @@ apiRouter.get(
             : 'Failed to load filtered directory.',
       });
     }
+  }
+);
+
+let activePrefetchCount = 0;
+
+apiRouter.get(
+  '/api/prefetch',
+  requireAuth,
+  (req: AuthenticatedRequest, res: Response) => {
+    const rawDomain = String(req.query.domain || '');
+    const companySlug = String(req.query.companySlug || '')
+      .trim()
+      .toLowerCase();
+    const domain = rawDomain ? normalizeDomain(rawDomain) : '';
+
+    res.json({ ok: true });
+
+    if (activePrefetchCount >= 2) return;
+    if (!companySlug && (!domain || !isValidDomain(domain))) return;
+
+    activePrefetchCount++;
+    void discoverDomainEmployees(domain, false, companySlug || undefined)
+      .catch(() => {
+        // Silent cache warm
+      })
+      .finally(() => {
+        activePrefetchCount = Math.max(0, activePrefetchCount - 1);
+      });
   }
 );
 

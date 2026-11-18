@@ -839,9 +839,19 @@ export const UserProfileSettingsPage: React.FC<UserProfileSettingsPageProps> = (
                   <div className="flex items-start gap-3">
                     <Laptop className="h-5 w-5 text-sky-500 shrink-0 mt-0.5" />
                     <div className="space-y-0.5">
-                      <div className="font-semibold text-slate-900 dark:text-white">
-                        {user.activeSessionDeviceLabel ||
-                          'Current Browser Workstation'}
+                      <div className="font-semibold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
+                        <span>
+                          {user.activeSessionDeviceLabel ||
+                            'Current Browser Workstation'}
+                        </span>
+                        {(user.activeSessionDeviceId ||
+                          user.registeredDeviceId) && (
+                          <span className="px-2 py-0.5 rounded-md font-mono text-[10px] bg-sky-500/12 text-sky-700 dark:text-sky-300 border border-sky-500/25">
+                            Device ID:{' '}
+                            {user.activeSessionDeviceId ||
+                              user.registeredDeviceId}
+                          </span>
+                        )}
                       </div>
                       <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
                         Timezone: {user.activeSessionTimezone || 'Local'} ·

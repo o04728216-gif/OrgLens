@@ -53,8 +53,6 @@ export const UsdtUpgradePage: React.FC<UsdtUpgradePageProps> = ({
   onRedeemVoucher,
 }) => {
   const [txHash, setTxHash] = useState('');
-  const [senderWallet, setSenderWallet] = useState('');
-  const [userNote, setUserNote] = useState('');
   const [submittingPayment, setSubmittingPayment] = useState(false);
   const [paymentFeedback, setPaymentFeedback] = useState<{
     tone: 'success' | 'info' | 'error';
@@ -77,11 +75,8 @@ export const UsdtUpgradePage: React.FC<UsdtUpgradePageProps> = ({
     try {
       const res = await onSubmitUsdtPayment({
         txHash,
-        senderWallet,
-        userNote,
       });
       setTxHash('');
-      setUserNote('');
       if (res.autoActivated) {
         setPaymentFeedback({
           tone: 'success',
@@ -220,7 +215,7 @@ export const UsdtUpgradePage: React.FC<UsdtUpgradePageProps> = ({
             </h1>
             <p className="text-sm text-slate-600 dark:text-slate-300">
               Unlock unlimited domain searches, unlimited Filter Explorer company
-              reveals, and full CSV exports across 3.5M+ worldwide organizations
+              reveals, and full CSV exports across 100M+ worldwide organizations
               for {config.subscriptionDurationDays} days.
             </p>
           </div>
@@ -280,34 +275,6 @@ export const UsdtUpgradePage: React.FC<UsdtUpgradePageProps> = ({
                   placeholder="e.g. 8f4c9b2e7a1d0c3e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e"
                   className="w-full rounded-lg px-3.5 py-2.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500"
                 />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Sender Wallet <span className="text-slate-400">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={senderWallet}
-                    onChange={(e) => setSenderWallet(e.target.value)}
-                    placeholder="Your T... TRC20 address"
-                    className="w-full rounded-lg px-3.5 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Note / Exchange Used{' '}
-                    <span className="text-slate-400">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={userNote}
-                    onChange={(e) => setUserNote(e.target.value)}
-                    placeholder="e.g. Sent from Binance"
-                    className="w-full rounded-lg px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
-                  />
-                </div>
               </div>
 
               <button

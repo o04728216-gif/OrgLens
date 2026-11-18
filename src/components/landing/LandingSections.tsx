@@ -20,7 +20,7 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
     },
     {
       num: '02.',
-      title: '3.5M+ Worldwide Organization & Revenue Filtering',
+      title: '100M+ Worldwide Organization & Revenue Filtering',
       body: 'Segment target accounts across 195+ countries and 6 continents by primary industry, employee headcount bracket, estimated annual revenue, and leadership role keywords.',
       metric: '500 organizations per batch with direct company drilldowns',
     },
@@ -40,37 +40,6 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
 
   return (
     <div className="space-y-20 pt-12 pb-16">
-      {/* 3-Column Quantitative Proof Row */}
-      <section
-        aria-label="Platform capabilities metrics"
-        className="grid grid-cols-1 sm:grid-cols-3 gap-6 py-8 border-y border-slate-200 dark:border-slate-800/90"
-      >
-        <div>
-          <div className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">
-            3.5M+
-          </div>
-          <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-            Worldwide B2B organizations indexed across all industries
-          </p>
-        </div>
-        <div>
-          <div className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">
-            195+
-          </div>
-          <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-            Countries &amp; territories searchable by headcount and revenue
-          </p>
-        </div>
-        <div>
-          <div className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">
-            ${config.unlimitedMonthlyPriceUsdt} / mo
-          </div>
-          <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-            Flat Unlimited Worldwide Pro settled via USDT (TRC20)
-          </p>
-        </div>
-      </section>
-
       {/* 1. Simple B2B Lens Coin & Unlimited Pricing (ABOVE Capabilities) */}
       <section id="pricing" className="space-y-8 scroll-mt-24">
         <div className="max-w-2xl space-y-2">
@@ -180,7 +149,7 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
                 <li className="flex items-start gap-2.5">
                   <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                   <span>
-                    Unlimited Filter Explorer company drilldowns across 3.5M+
+                    Unlimited Filter Explorer company drilldowns across 100M+
                     worldwide organizations
                   </span>
                 </li>

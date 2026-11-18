@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Moon,
+  Radar,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -52,6 +53,12 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       id: 'overview',
       label: 'Executive Overview',
       icon: LayoutDashboard,
+    },
+    {
+      id: 'crawler',
+      label: 'Worldwide Crawler',
+      icon: Radar,
+      count: snapshot?.crawlerStats?.vaultCompaniesCount,
     },
     {
       id: 'users',

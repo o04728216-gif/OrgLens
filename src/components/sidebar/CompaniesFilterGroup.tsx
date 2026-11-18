@@ -1,6 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { Search, X } from 'lucide-react';
-import type { GlobalIndustryOption, SidebarFiltersState } from '../../types';
+import type {
+  FilterFacetsResponse,
+  GlobalIndustryOption,
+  SidebarFiltersState,
+} from '../../types';
 import { truncateIndustry20 } from '../../utils/emailFormulas';
 import { COMPANY_REVENUE_RANGES } from '../../utils/geographyAndRevenue';
 import { SidebarAccordionCard } from './SidebarAccordionCard';
@@ -16,6 +20,7 @@ interface CompaniesFilterGroupProps {
   sidebarSearch: string;
   globalIndustries: GlobalIndustryOption[];
   industriesLoading: boolean;
+  filterFacets?: FilterFacetsResponse | null;
   isSectionOpen: (id: AccordionSectionId) => boolean;
   onToggleSection: (id: AccordionSectionId) => void;
   onChangeFilters: (
@@ -33,6 +38,7 @@ export const CompaniesFilterGroup: React.FC<CompaniesFilterGroupProps> = ({
   sidebarSearch,
   globalIndustries,
   industriesLoading,
+  filterFacets = null,
   isSectionOpen,
   onToggleSection,
   onChangeFilters,
@@ -241,7 +247,7 @@ export const CompaniesFilterGroup: React.FC<CompaniesFilterGroupProps> = ({
             )}
 
             <div className="max-h-52 overflow-y-auto overscroll-contain rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/90 p-2 space-y-1">
-              {industriesLoading ? (
+              {industriesLoading && globalIndustries.length === 0 ? (
                 <p className="py-4 text-center text-xs text-slate-500 dark:text-slate-400">
                   Loading global industries...
                 </p>
@@ -254,6 +260,9 @@ export const CompaniesFilterGroup: React.FC<CompaniesFilterGroupProps> = ({
                   const checked = filters.selectedIndustrySlugs.includes(
                     ind.slug
                   );
+                  const liveIndCount =
+                    filterFacets?.industryCounts?.[ind.slug] ??
+                    ind.companyCount;
                   return (
                     <label
                       key={ind.slug}
@@ -275,9 +284,15 @@ export const CompaniesFilterGroup: React.FC<CompaniesFilterGroupProps> = ({
                           {truncateIndustry20(ind.fullTitle)}
                         </span>
                       </span>
-                      {ind.companyCount > 0 && (
-                        <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-slate-500 shrink-0 whitespace-nowrap">
-                          {ind.companyCount.toLocaleString()}
+                      {liveIndCount >= 0 && (
+                        <span
+                          className={`font-mono tabular-nums text-[11px] shrink-0 whitespace-nowrap ${
+                            checked
+                              ? 'text-sky-600 dark:text-sky-400 font-semibold'
+                              : 'text-slate-400 dark:text-slate-500'
+                          }`}
+                        >
+                          {liveIndCount.toLocaleString()}
                         </span>
                       )}
                     </label>
@@ -330,26 +345,44 @@ export const CompaniesFilterGroup: React.FC<CompaniesFilterGroupProps> = ({
           <div className="px-3.5 pb-3.5 pt-2 space-y-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
             {EMPLOYEE_RANGE_OPTIONS.map((range) => {
               const checked = filters.employeeRanges.includes(range);
+              const bracketCount = filterFacets?.employeeRangeCounts?.[range];
               return (
                 <label
                   key={range}
-                  className="flex items-center gap-2 text-xs font-mono tabular-nums text-slate-700 dark:text-slate-200 cursor-pointer"
+                  className={`flex items-center justify-between gap-2 py-0.5 text-xs font-mono tabular-nums cursor-pointer ${
+                    checked
+                      ? 'text-slate-900 dark:text-white font-semibold'
+                      : 'text-slate-700 dark:text-slate-200'
+                  }`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => {
-                      onChangeFilters((prev) => ({
-                        ...prev,
-                        employeeRanges: checked
-                          ? prev.employeeRanges.filter((r) => r !== range)
-                          : [...prev.employeeRanges, range],
-                      }));
-                      onActivateCompanyDirectory();
-                    }}
-                    className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-                  />
-                  <span>{range}</span>
+                  <span className="flex items-center gap-2 min-w-0">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        onChangeFilters((prev) => ({
+                          ...prev,
+                          employeeRanges: checked
+                            ? prev.employeeRanges.filter((r) => r !== range)
+                            : [...prev.employeeRanges, range],
+                        }));
+                        onActivateCompanyDirectory();
+                      }}
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 shrink-0"
+                    />
+                    <span className="truncate">{range}</span>
+                  </span>
+                  {typeof bracketCount === 'number' && (
+                    <span
+                      className={`text-[11px] shrink-0 ${
+                        checked
+                          ? 'text-sky-600 dark:text-sky-400 font-semibold'
+                          : 'text-slate-400 dark:text-slate-500'
+                      }`}
+                    >
+                      {bracketCount.toLocaleString()}
+                    </span>
+                  )}
                 </label>
               );
             })}
@@ -373,26 +406,44 @@ export const CompaniesFilterGroup: React.FC<CompaniesFilterGroupProps> = ({
           <div className="px-3.5 pb-3.5 pt-2 space-y-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
             {COMPANY_REVENUE_RANGES.map((revRange) => {
               const checked = filters.revenueRanges.includes(revRange);
+              const revCount = filterFacets?.revenueRangeCounts?.[revRange];
               return (
                 <label
                   key={revRange}
-                  className="flex items-center gap-2 text-xs font-mono tabular-nums text-slate-700 dark:text-slate-200 cursor-pointer"
+                  className={`flex items-center justify-between gap-2 py-0.5 text-xs font-mono tabular-nums cursor-pointer ${
+                    checked
+                      ? 'text-slate-900 dark:text-white font-semibold'
+                      : 'text-slate-700 dark:text-slate-200'
+                  }`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => {
-                      onChangeFilters((prev) => ({
-                        ...prev,
-                        revenueRanges: checked
-                          ? prev.revenueRanges.filter((r) => r !== revRange)
-                          : [...prev.revenueRanges, revRange],
-                      }));
-                      onActivateCompanyDirectory();
-                    }}
-                    className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-                  />
-                  <span>{revRange}</span>
+                  <span className="flex items-center gap-2 min-w-0">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        onChangeFilters((prev) => ({
+                          ...prev,
+                          revenueRanges: checked
+                            ? prev.revenueRanges.filter((r) => r !== revRange)
+                            : [...prev.revenueRanges, revRange],
+                        }));
+                        onActivateCompanyDirectory();
+                      }}
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 shrink-0"
+                    />
+                    <span className="truncate">{revRange}</span>
+                  </span>
+                  {typeof revCount === 'number' && (
+                    <span
+                      className={`text-[11px] shrink-0 ${
+                        checked
+                          ? 'text-sky-600 dark:text-sky-400 font-semibold'
+                          : 'text-slate-400 dark:text-slate-500'
+                      }`}
+                    >
+                      {revCount.toLocaleString()}
+                    </span>
+                  )}
                 </label>
               );
             })}

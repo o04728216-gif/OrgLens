@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   Coins,
-  Globe,
   Infinity as InfinityIcon,
   LogOut,
   Search,
@@ -31,12 +30,8 @@ interface TopNavHeaderProps {
   sessionMode: SessionMode;
   activeTab: PrimaryTab;
   primaryTabs: PrimaryTabConfig[];
-  showWidgetsDrawer: boolean;
-  totalMatchedCompanies?: number;
   onBrandClick: () => void;
   onSelectTab: (tab: PrimaryTab) => void;
-  onToggleWidgetsDrawer: () => void;
-  onOpenWorldwideExplorer: () => void;
   onFocusDomainLookup: () => void;
   onOpenProfile: () => void;
   onOpenUpgrade: () => void;
@@ -51,12 +46,8 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   sessionMode,
   activeTab,
   primaryTabs,
-  showWidgetsDrawer,
-  totalMatchedCompanies,
   onBrandClick,
   onSelectTab,
-  onToggleWidgetsDrawer,
-  onOpenWorldwideExplorer,
   onFocusDomainLookup,
   onOpenProfile,
   onOpenUpgrade,
@@ -80,8 +71,8 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   const isOutOfCoins = !user.hasActiveUnlimited && user.lensCoins <= 0;
 
   return (
-    <header className="sticky top-0 z-30 backdrop-blur-xl bg-white/80 dark:bg-[#090d16]/80 border-b border-slate-200/80 dark:border-slate-800/80">
-      <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-6 px-4 sm:px-6 lg:px-8 h-16">
+    <header className="sticky top-0 z-30 backdrop-blur-xl bg-white/85 dark:bg-[#090d16]/85 border-b border-slate-200/80 dark:border-slate-800/80">
+      <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-2 sm:gap-6 px-3.5 sm:px-6 lg:px-8 h-15 sm:h-16">
         {/* Zone 1: Brand Wordmark */}
         <a
           href="/domain-lookup/full-names-emails"
@@ -113,32 +104,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
               {tab.label}
             </button>
           ))}
-          <button
-            type="button"
-            onClick={onToggleWidgetsDrawer}
-            className={`underline-offset-4 hover:underline transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              appView === 'workspace' && showWidgetsDrawer
-                ? 'text-slate-900 dark:text-white font-semibold underline'
-                : 'hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Widgets &amp; Sync
-          </button>
-          {sessionMode === 'domain' ? (
-            <button
-              type="button"
-              onClick={onOpenWorldwideExplorer}
-              className="inline-flex items-center gap-1.5 underline-offset-4 hover:underline text-sky-700 dark:text-sky-400 hover:text-sky-600 dark:hover:text-sky-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Globe className="h-3.5 w-3.5" />
-              <span>
-                Worldwide Explorer
-                {typeof totalMatchedCompanies === 'number'
-                  ? ` (${totalMatchedCompanies.toLocaleString()})`
-                  : ''}
-              </span>
-            </button>
-          ) : (
+          {sessionMode !== 'domain' && (
             <button
               type="button"
               onClick={onFocusDomainLookup}
@@ -151,7 +117,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
         </nav>
 
         {/* Zone 3: Top-Right Lens Coin Counter + Account Menu */}
-        <div className="flex items-center gap-2.5 shrink-0" ref={menuRef}>
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0" ref={menuRef}>
           <button
             type="button"
             onClick={onOpenUpgrade}
@@ -160,7 +126,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                 ? 'Unlimited Plan Active — View Billing & Lens Coin Ledger'
                 : `${user.lensCoins} Lens Coins remaining — Click to upgrade for Unlimited ($${monthlyPriceUsdt}/mo USDT)`
             }
-            className={`inline-flex items-center gap-2 px-3 sm:px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`min-h-[38px] sm:min-h-0 inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
               user.hasActiveUnlimited
                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-600'
                 : isOutOfCoins
@@ -181,8 +147,11 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                 <span className="font-mono tabular-nums text-sm leading-none">
                   {user.lensCoins.toLocaleString()}
                 </span>
-                <span>
+                <span className="hidden sm:inline">
                   {user.lensCoins === 1 ? 'Lens Coin' : 'Lens Coins'}
+                </span>
+                <span className="sm:hidden">
+                  {user.lensCoins === 1 ? 'Coin' : 'Coins'}
                 </span>
               </>
             )}
@@ -192,7 +161,8 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
             type="button"
             onClick={onOpenProfile}
             title="Account Profile, Password & Single-Device Settings"
-            className={`inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            aria-label="Account Settings"
+            className={`min-h-[38px] min-w-[38px] sm:min-h-0 sm:min-w-0 inline-flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               appView === 'profile'
                 ? 'bg-sky-600 text-white border-sky-600'
                 : 'bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800/90 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200/80 dark:border-slate-700/80'
@@ -207,10 +177,10 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
               type="button"
               onClick={() => setMenuOpen((v) => !v)}
               aria-expanded={menuOpen}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800/90 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700/80 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="min-h-[38px] sm:min-h-0 inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800/90 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700/80 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0" title="Single-Device Active Session" />
-              <span className="max-w-[110px] truncate">{user.fullName}</span>
+              <span className="max-w-[76px] sm:max-w-[110px] truncate">{user.fullName}</span>
               <ChevronDown className="h-3.5 w-3.5 opacity-70" />
             </button>
 

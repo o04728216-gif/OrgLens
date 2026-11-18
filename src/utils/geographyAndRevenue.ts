@@ -528,23 +528,147 @@ export function estimateCompanyRevenueRange(
   }
 }
 
+const CCTLD_TO_COUNTRY_SLUG: Record<string, string> = {
+  uk: 'united-kingdom',
+  gb: 'united-kingdom',
+  ca: 'canada',
+  au: 'australia',
+  nz: 'new-zealand',
+  de: 'germany',
+  fr: 'france',
+  nl: 'netherlands',
+  es: 'spain',
+  it: 'italy',
+  ch: 'switzerland',
+  se: 'sweden',
+  no: 'norway',
+  dk: 'denmark',
+  fi: 'finland',
+  be: 'belgium',
+  at: 'austria',
+  pl: 'poland',
+  ie: 'ireland',
+  pt: 'portugal',
+  cz: 'czech-republic',
+  ro: 'romania',
+  gr: 'greece',
+  hu: 'hungary',
+  ua: 'ukraine',
+  lu: 'luxembourg',
+  ee: 'estonia',
+  bg: 'bulgaria',
+  hr: 'croatia',
+  rs: 'serbia',
+  sk: 'slovakia',
+  si: 'slovenia',
+  lt: 'lithuania',
+  lv: 'latvia',
+  in: 'india',
+  jp: 'japan',
+  sg: 'singapore',
+  cn: 'china',
+  ae: 'united-arab-emirates',
+  il: 'israel',
+  hk: 'hong-kong',
+  id: 'indonesia',
+  tr: 'turkey',
+  kr: 'korea-republic-of',
+  my: 'malaysia',
+  ph: 'philippines',
+  pk: 'pakistan',
+  sa: 'saudi-arabia',
+  th: 'thailand',
+  vn: 'viet-nam',
+  tw: 'taiwan-province-of-china',
+  bd: 'bangladesh',
+  br: 'brazil',
+  ar: 'argentina',
+  cl: 'chile',
+  pe: 'peru',
+  uy: 'uruguay',
+  mx: 'mexico',
+  za: 'south-africa',
+  ng: 'nigeria',
+  eg: 'egypt',
+  ke: 'kenya',
+  ma: 'morocco',
+  gh: 'ghana',
+  us: 'united-states',
+};
+
+/**
+ * Infers canonical TheOrg country slug from freeform HQ location text and/or corporate domain ccTLD.
+ */
+export function inferCountrySlugFromLocation(
+  locationText?: string | null,
+  domain?: string | null
+): string | undefined {
+  const locLower = (locationText || '').trim().toLowerCase();
+  if (locLower && locLower !== 'global' && locLower !== 'worldwide') {
+    const commaParts = locLower
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const tail = commaParts[commaParts.length - 1] || '';
+
+    // Fast exact check on trailing segment first (e.g. "San Francisco, CA, United States" or "Austin, TX")
+    if (
+      tail === 'united states' ||
+      tail === 'usa' ||
+      tail === 'us' ||
+      tail === 'u.s.' ||
+      tail === 'u.s.a.' ||
+      (commaParts.length >= 2 && US_STATE_CODES.has(tail))
+    ) {
+      return 'united-states';
+    }
+    if (
+      tail === 'canada' ||
+      (commaParts.length >= 2 && CA_PROVINCE_CODES.has(tail))
+    ) {
+      return 'canada';
+    }
+
+    for (const continent of CONTINENTS_CATALOG) {
+      for (const country of continent.countries) {
+        if (locationMatchesCountry(locLower, country)) {
+          return country.theorgSlug;
+        }
+      }
+    }
+  }
+
+  if (domain) {
+    const cleanDom = domain.trim().toLowerCase();
+    const parts = cleanDom.split('.');
+    const tld = parts[parts.length - 1] || '';
+    // Note: generic commercial ccTLDs like .io, .ai, .co, .me, .tv, .gg are global tech TLDs, not country indicators
+    if (tld && CCTLD_TO_COUNTRY_SLUG[tld]) {
+      return CCTLD_TO_COUNTRY_SLUG[tld];
+    }
+  }
+
+  return undefined;
+}
+
 export function estimateIndexedContactsForRange(employeeRange: string): number {
   switch (employeeRange) {
     case '10,000+':
-      return 3400;
-    case '5,001 - 10,000':
       return 1850;
+    case '5,001 - 10,000':
+      return 920;
     case '1,001 - 5,000':
-      return 780;
+      return 410;
     case '501 - 1,000':
-      return 340;
+      return 180;
     case '201 - 500':
-      return 165;
+      return 88;
     case '51 - 200':
-      return 64;
+      return 36;
     case '1 - 50':
-      return 18;
+      return 12;
     default:
-      return 95;
+      return 38;
   }
 }
+

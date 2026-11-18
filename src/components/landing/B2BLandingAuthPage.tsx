@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { PublicPlatformConfig } from '../../types';
 import { LandingSections } from './LandingSections';
+import { RainbowMotionBackdrop } from './RainbowMotionBackdrop';
 
 interface B2BLandingAuthPageProps {
   authMode: 'login' | 'signup';
@@ -85,7 +86,9 @@ export const B2BLandingAuthPage: React.FC<B2BLandingAuthPageProps> = ({
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 transition-colors duration-200">
+    <div className="relative overflow-x-clip min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 transition-colors duration-200">
+      <RainbowMotionBackdrop theme={theme} />
+
       {/* Strict 3-Zone Top Bar Contract */}
       <header className="sticky top-0 z-30 backdrop-blur-xl bg-white/80 dark:bg-[#090d16]/80 border-b border-slate-200/80 dark:border-slate-800/80">
         <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-8 px-4 sm:px-6 lg:px-8 h-16">
@@ -143,7 +146,7 @@ export const B2BLandingAuthPage: React.FC<B2BLandingAuthPageProps> = ({
         </div>
       </header>
 
-      <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 lg:px-8 pt-10 sm:pt-14">
+      <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 lg:px-8 pt-10 sm:pt-14">
         {/* 2-Column Hero Split with Embedded Login / Sign Up Card */}
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-stretch">
           {/* Left Column: B2B Value Proposition */}
@@ -151,20 +154,18 @@ export const B2BLandingAuthPage: React.FC<B2BLandingAuthPageProps> = ({
             <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-sky-700 dark:text-sky-400">
               <span>B2B Corporate Contact Intelligence</span>
               <span aria-hidden="true">·</span>
-              <span>3.5M+ Worldwide Companies</span>
-              <span aria-hidden="true">·</span>
-              <span>Direct Executive Hierarchies</span>
+              <span>100M+ Worldwide Companies</span>
             </div>
 
-            <h1 className="font-display text-[clamp(2.25rem,3.6vw,3.45rem)] font-bold leading-[1.12] tracking-tight text-slate-900 dark:text-white [text-wrap:balance]">
-              Find verified decision-maker emails and org hierarchies for any company worldwide.
+            <h1 className="font-display text-[clamp(2.15rem,3.4vw,3.3rem)] font-bold leading-[1.13] tracking-tight text-slate-900 dark:text-white [text-wrap:balance]">
+              Identify corporate leadership, organizational rosters, and verified work emails across any global domain.
             </h1>
 
             <p className="text-base sm:text-lg leading-relaxed text-slate-600 dark:text-slate-300 max-w-2xl">
-              OrgLens delivers verified corporate contacts, maps leadership from
-              C-Suite executives down to individual contributors, and lets your
-              team filter 3.5M+ organizations by industry, employee count,
-              revenue, and geography.
+              Search any company domain directly—or filter 100M+ worldwide
+              organizations by geography, industry, headcount, and revenue—to
+              access verified corporate websites, executive reporting lines, and
+              direct business email addresses in seconds.
             </p>
           </div>
 
@@ -372,7 +373,7 @@ export const B2BLandingAuthPage: React.FC<B2BLandingAuthPageProps> = ({
       </main>
 
       {/* Quiet B2B Footer */}
-      <footer className="border-t border-slate-200/80 dark:border-slate-800/80 py-8">
+      <footer className="relative z-10 border-t border-slate-200/80 dark:border-slate-800/80 py-8 backdrop-blur-xs bg-white/40 dark:bg-[#090d16]/40">
         <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
           <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
             <span className="font-display font-semibold text-slate-800 dark:text-slate-200">

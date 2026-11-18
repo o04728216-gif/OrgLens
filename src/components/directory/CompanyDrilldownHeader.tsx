@@ -19,10 +19,7 @@ export const CompanyDrilldownHeader: React.FC<CompanyDrilldownHeaderProps> = ({
   );
 
   const displayName = companyResult?.companyName || company.name;
-  const domain =
-    companyResult?.domain ||
-    company.domain ||
-    (company.slug ? `${company.slug}.com` : '');
+  const domain = companyResult?.domain || company.domain || '';
   const websiteUrl =
     company.websiteUrl || (domain ? `https://${domain}` : '');
   const headquarters = companyResult?.headquarters || company.location;

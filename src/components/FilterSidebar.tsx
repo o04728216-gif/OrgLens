@@ -10,7 +10,6 @@ import {
   FolderSearch,
   Gauge,
   Globe2,
-  Loader2,
   MapPin,
   Search,
   SlidersHorizontal,
@@ -19,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  FilterFacetsResponse,
   GlobalIndustryOption,
   SearchResponse,
   SidebarFiltersState,
@@ -59,6 +59,7 @@ interface FilterSidebarProps {
   mobileOpen: boolean;
   onCloseMobile: () => void;
   isFilterLoading?: boolean;
+  filterFacets?: FilterFacetsResponse | null;
 }
 
 const COLLAPSED_SECTION_ICONS: ReadonlyArray<{
@@ -93,7 +94,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   onToggleCollapse,
   mobileOpen,
   onCloseMobile,
-  isFilterLoading = false,
+  filterFacets = null,
 }) => {
   const [sidebarSearch, setSidebarSearch] = useState('');
   const [showSavedMenu, setShowSavedMenu] = useState(false);
@@ -192,12 +193,6 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
             <span className="font-mono tabular-nums text-xs font-semibold text-sky-600 dark:text-sky-400">
               · {activeCount}
             </span>
-          )}
-          {isFilterLoading && (
-            <Loader2
-              aria-label="Auto-loading filtered results"
-              className="h-3.5 w-3.5 animate-spin text-sky-600 dark:text-sky-400 shrink-0"
-            />
           )}
           {activeCount > 0 && (
             <button
@@ -346,6 +341,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
           sidebarSearch={sidebarSearch}
           globalIndustries={globalIndustries}
           industriesLoading={industriesLoading}
+          filterFacets={filterFacets}
           isSectionOpen={isSectionOpen}
           onToggleSection={toggleSection}
           onChangeFilters={onChangeFilters}
@@ -359,6 +355,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
           filters={filters}
           sectionCounts={sectionCounts}
           sidebarSearch={sidebarSearch}
+          filterFacets={filterFacets}
           isSectionOpen={isSectionOpen}
           onToggleSection={toggleSection}
           onChangeFilters={onChangeFilters}

@@ -1,4 +1,8 @@
-import type { DiscoverySource, EmailPatternAnalysis } from '../src/types.ts';
+import type {
+  ConfirmedEmailSource,
+  DiscoverySource,
+  EmailPatternAnalysis,
+} from '../src/types.ts';
 
 export interface CacheEntry<T> {
   data: T;
@@ -15,6 +19,8 @@ export interface CandidateEmployee {
   profileUrl: string;
   source: DiscoverySource;
   observedEmail?: string;
+  emailSource?: ConfirmedEmailSource;
+  emailSourceUrl?: string;
 }
 
 export interface WebsiteDiscoveryInfo {
@@ -23,6 +29,8 @@ export interface WebsiteDiscoveryInfo {
   inferredIndustries: string[];
   linkedinCompanySlug: string | null;
   employees: CandidateEmployee[];
+  confirmedEmails: ConfirmedEmailHit[];
+  observedEmails?: string[];
   rawWebsiteCorpus: string;
 }
 
@@ -73,12 +81,21 @@ export interface RawSearchHit {
 export interface PgpEmailHit {
   fullName: string;
   email: string;
+  sourceUrl?: string;
+}
+
+export interface ConfirmedEmailHit {
+  fullName: string;
+  email: string;
+  jobTitle?: string;
+  emailSource: ConfirmedEmailSource;
+  sourceUrl?: string;
 }
 
 export interface EnrichedEmailPatternResult {
   analysis: EmailPatternAnalysis;
-  verifiedPersonEmails: Map<string, string>;
-  discoveredContacts: PgpEmailHit[];
+  verifiedPersonEmails: Map<string, ConfirmedEmailHit>;
+  discoveredContacts: ConfirmedEmailHit[];
 }
 
 export interface GlobalFilterParams {

@@ -1,7 +1,8 @@
-import axios from 'axios';
 import type { Request } from 'express';
 import type {
+  ConfirmedEmailSource,
   DepartmentCategory,
+  DiscoverySource,
   EmployeeRecord,
   FilterExplorerResponse,
   GlobalCompanyItem,
@@ -14,7 +15,6 @@ import {
   splitFullNameForExcel,
 } from '../../src/utils/emailFormulas.ts';
 import type { EmailFormulaId } from '../../src/utils/emailFormulas.ts';
-import { estimateIndexedContactsForRange } from '../../src/utils/geographyAndRevenue.ts';
 import {
   CACHE_TTL_MS,
   emailPatternCache,
@@ -22,6 +22,12 @@ import {
   slugToDomainCache,
   slugToWebsiteCache,
 } from '../cache.ts';
+import {
+  getCompanyOfficersBySlugOrDomain,
+  getConfirmedContactsForDomain,
+  getVaultQuickRoster,
+  saveVaultQuickRoster,
+} from '../store/companyVaultDb.ts';
 import type {
   CandidateEmployee,
   EnrichedEmailPatternResult,
@@ -35,8 +41,6 @@ import {
   computeImportanceScore,
 } from '../utils/rankingAndStats.ts';
 import {
-  browserHeaders,
-  buildFallbackDomainFromSlug,
   cleanJobTitle,
   cleanWhitespace,
   humanizeSlug,
@@ -48,43 +52,74 @@ import {
 } from '../utils/textAndDomain.ts';
 import { detectBatchCompanyEmailPatterns } from './emailIntelligence.ts';
 import {
+  computeFilterFacetsAndTotals,
   parseGlobalFilterParams,
   resolveFilteredGlobalCompanies,
 } from './globalDirectoryService.ts';
+import {
+  isDisallowedDirectoryDomain,
+  isSuspectGeneratedDomain,
+  resolveSingleRealCompanyDomain,
+} from './realDomainResolver.ts';
 import { queryTheOrgGraphQL } from './theOrgClient.ts';
+import { markUserApiActivity } from './worldwideCrawlerDaemon.ts';
+
+function mapSourceFromEmailSource(
+  src: ConfirmedEmailSource | undefined,
+  fallback: DiscoverySource
+): DiscoverySource {
+  if (!src) return fallback;
+  switch (src) {
+    case 'Company Website':
+      return 'Company Site';
+    case 'GitHub Commit':
+      return 'GitHub Commit';
+    case 'OpenPGP Keyserver':
+      return 'OpenPGP Keyserver';
+    case 'NPM Registry':
+      return 'NPM Registry';
+    case 'Business Registry':
+      return 'Business Registry';
+    default:
+      return 'Public Web Verified';
+  }
+}
 
 /**
- * Applies a company's live-detected internet email format & web-verified emails
- * onto all contacts in its roster.
+ * Applies a company's live-detected internet email format & real confirmed emails
+ * onto all contacts in its roster, and appends standalone confirmed contacts.
  */
 export function applyDetectedPatternToRoster(
   roster: EmployeeRecord[],
-  patternResult: EnrichedEmailPatternResult | undefined
+  patternResult: EnrichedEmailPatternResult | undefined,
+  companyMeta?: { companyName: string; domain: string; industry: string }
 ): EmployeeRecord[] {
-  if (!patternResult || roster.length === 0) return roster;
+  if (!patternResult) return roster;
 
-  const { analysis, verifiedPersonEmails } = patternResult;
+  const { analysis, verifiedPersonEmails, discoveredContacts } = patternResult;
   const observedSet = new Set(
     analysis.sampleObservedEmails.map((s) => s.toLowerCase())
   );
 
-  return roster.map((emp) => {
+  const updated = roster.map((emp) => {
     const normKey = normalizePersonKey(emp.fullName);
-    const verifiedWebEmail = verifiedPersonEmails.get(normKey);
+    const confirmedHit = verifiedPersonEmails.get(normKey);
 
-    if (verifiedWebEmail) {
+    if (confirmedHit) {
       const matchedF = EMAIL_FORMULAS.find(
         (f) =>
           applyExcelEmailFormula(emp.fullName, emp.domain, f.id) ===
-          verifiedWebEmail.toLowerCase()
+          confirmedHit.email.toLowerCase()
       );
       return {
         ...emp,
-        email: verifiedWebEmail.toLowerCase(),
+        email: confirmedHit.email.toLowerCase(),
         emailAccuracy: 99,
         emailFormulaId: matchedF?.id || analysis.detectedFormulaId,
         emailFormulaLabel: matchedF?.label || analysis.formulaLabel,
         emailVerifiedOnWeb: true,
+        emailSource: confirmedHit.emailSource,
+        emailSourceUrl: confirmedHit.sourceUrl,
       };
     }
 
@@ -95,8 +130,9 @@ export function applyDetectedPatternToRoster(
     );
     const { lastName, hasComplexParts } = splitFullNameForExcel(emp.fullName);
     let acc = analysis.patternConfidence;
-    if (!lastName) acc = Math.max(52, acc - 14);
+    if (!lastName) acc = Math.max(54, acc - 15);
     else if (hasComplexParts) acc = Math.max(66, acc - 4);
+    if (!analysis.mxVerified) acc = Math.max(52, acc - 10);
 
     const isObserved = Boolean(email && observedSet.has(email.toLowerCase()));
     if (isObserved) {
@@ -106,13 +142,65 @@ export function applyDetectedPatternToRoster(
     return {
       ...emp,
       email,
-      emailAccuracy: acc,
+      emailAccuracy: Math.min(99, Math.max(50, Math.round(acc))),
       emailFormulaId: analysis.detectedFormulaId,
       emailFormulaLabel: analysis.formulaLabel,
-      emailVerifiedOnWeb: isObserved,
+      emailVerifiedOnWeb: isObserved || emp.emailVerifiedOnWeb,
+      emailSource: isObserved
+        ? emp.emailSource || 'Public Web Index'
+        : emp.emailSource,
     };
   });
+
+  // Append standalone confirmed contacts not yet in the roster
+  const existingEmails = new Set(updated.map((e) => e.email.toLowerCase()));
+  const baseDomain = companyMeta?.domain || updated[0]?.domain || '';
+  const baseCompany = companyMeta?.companyName || updated[0]?.companyName || '';
+  const baseIndustry =
+    companyMeta?.industry ||
+    updated[0]?.industry ||
+    'Information Technology & Business Services';
+
+  if (baseDomain && discoveredContacts.length > 0) {
+    for (const hit of discoveredContacts) {
+      const cleanEmail = hit.email.toLowerCase();
+      if (existingEmails.has(cleanEmail)) continue;
+      existingEmails.add(cleanEmail);
+      const role = hit.jobTitle || 'Verified Contact';
+      updated.push({
+        id: `confirmed-${slugifyName(baseDomain)}-${slugifyName(cleanEmail)}`,
+        rank: 0,
+        importanceScore: computeImportanceScore(role, 2, 1),
+        fullName: hit.fullName,
+        companyName: baseCompany,
+        email: cleanEmail,
+        emailAccuracy: 99,
+        emailFormulaId: analysis.detectedFormulaId,
+        emailFormulaLabel: analysis.formulaLabel,
+        emailVerifiedOnWeb: true,
+        emailSource: hit.emailSource,
+        emailSourceUrl: hit.sourceUrl,
+        jobTitle: role,
+        industry: baseIndustry,
+        department: classifyDepartment(role, ''),
+        seniority: classifySeniority(role),
+        profileUrl: hit.sourceUrl || `https://${baseDomain}`,
+        domain: baseDomain,
+        source: mapSourceFromEmailSource(
+          hit.emailSource,
+          'Public Web Verified'
+        ),
+      });
+    }
+  }
+
+  return updated;
 }
+
+const filterExplorerRamCache = new Map<
+  string,
+  { data: FilterExplorerResponse; expiresAt: number }
+>();
 
 export async function fetchQuickCompanyRoster(
   comp: GlobalCompanyItem
@@ -123,10 +211,41 @@ export async function fetchQuickCompanyRoster(
   const cached = quickRosterCache.get(slug);
   if (cached && cached.expiresAt > Date.now()) {
     const dom = (cached.data[0]?.domain || comp.domain || '').toLowerCase();
-    const cachedPat = dom ? emailPatternCache.get(dom) : undefined;
-    return cachedPat && cachedPat.expiresAt > Date.now()
-      ? applyDetectedPatternToRoster(cached.data, cachedPat.data)
-      : cached.data;
+    if (
+      dom &&
+      !isSuspectGeneratedDomain(dom, slug, comp.name, comp.sourceRegistry)
+    ) {
+      const cachedPat = emailPatternCache.get(dom);
+      return cachedPat && cachedPat.expiresAt > Date.now()
+        ? applyDetectedPatternToRoster(cached.data, cachedPat.data, {
+            companyName: comp.name,
+            domain: dom,
+            industry: comp.industry,
+          })
+        : cached.data;
+    }
+  }
+
+  const sqliteRoster = getVaultQuickRoster<EmployeeRecord[]>(slug);
+  if (sqliteRoster && sqliteRoster.length > 0) {
+    const dom = (sqliteRoster[0]?.domain || comp.domain || '').toLowerCase();
+    if (
+      dom &&
+      !isSuspectGeneratedDomain(dom, slug, comp.name, comp.sourceRegistry)
+    ) {
+      quickRosterCache.set(slug, {
+        data: sqliteRoster,
+        expiresAt: Date.now() + CACHE_TTL_MS,
+      });
+      const cachedPat = emailPatternCache.get(dom);
+      return cachedPat && cachedPat.expiresAt > Date.now()
+        ? applyDetectedPatternToRoster(sqliteRoster, cachedPat.data, {
+            companyName: comp.name,
+            domain: dom,
+            industry: comp.industry,
+          })
+        : sqliteRoster;
+    }
   }
 
   try {
@@ -155,85 +274,37 @@ export async function fetchQuickCompanyRoster(
       }
     `;
 
-    const gqlResp = await queryTheOrgGraphQL<{
-      company?: {
-        id?: string;
-        name?: string;
-        extensions?: string[];
-        social?: { websiteUrl?: string };
-      };
-      teamsByCompany?: GraphQLTeam[];
-    }>(
-      COMPANY_AND_TEAMS_QUERY,
-      {
-        slug,
-        tLimit: 100,
-        tOffset: 0,
-        mLimit: 250,
-      },
-      9000
-    );
+    const isExternalRegistryOnly =
+      comp.sourceRegistry &&
+      comp.sourceRegistry !== 'TheOrg Directory' &&
+      comp.sourceRegistry !== 'Live Domain Discovery';
 
-    let companyObj: Record<string, unknown> = gqlResp?.company || {};
-    let teams: GraphQLTeam[] = gqlResp?.teamsByCompany || [];
+    let companyObj: Record<string, unknown> = {};
+    let teams: GraphQLTeam[] = [];
+    const initialNodes: GraphQLOrgNode[] = [];
 
-    if (teams.length === 100) {
-      const moreTeams = await queryTheOrgGraphQL<{
+    if (!isExternalRegistryOnly) {
+      const gqlResp = await queryTheOrgGraphQL<{
+        company?: {
+          id?: string;
+          name?: string;
+          extensions?: string[];
+          social?: { websiteUrl?: string };
+        };
         teamsByCompany?: GraphQLTeam[];
       }>(
-        `query($slug: String!) {
-          teamsByCompany(companySlug: $slug, limit: 100, offset: 100) {
-            name
-            slug
-            memberCount
-            members(limit: 250, offset: 0) {
-              id
-              slug
-              fullName
-              role
-            }
-          }
-        }`,
-        { slug },
-        7500
+        COMPANY_AND_TEAMS_QUERY,
+        {
+          slug,
+          tLimit: 100,
+          tOffset: 0,
+          mLimit: 350,
+        },
+        1400
       );
-      if (moreTeams?.teamsByCompany?.length) {
-        teams = [...teams, ...moreTeams.teamsByCompany];
-      }
-    }
 
-    let initialNodes: GraphQLOrgNode[] = [];
-    const totalTeamMembers = teams.reduce(
-      (acc, t) => acc + (t.members?.length || 0),
-      0
-    );
-
-    if (totalTeamMembers === 0) {
-      try {
-        const pageResp = await axios.get(pageUrl, {
-          timeout: 2400,
-          headers: browserHeaders(),
-          validateStatus: (s) => s === 200,
-        });
-        const html = typeof pageResp.data === 'string' ? pageResp.data : '';
-        const match = html.match(
-          /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/
-        );
-        const pageProps = match?.[1]
-          ? JSON.parse(match[1])?.props?.pageProps || {}
-          : {};
-        if (!companyObj?.name && pageProps?.initialCompany) {
-          companyObj = pageProps.initialCompany;
-        }
-        if (Array.isArray(pageProps?.initialNodes)) {
-          initialNodes = pageProps.initialNodes;
-        }
-        if (teams.length === 0 && Array.isArray(pageProps?.initialTeams)) {
-          teams = pageProps.initialTeams;
-        }
-      } catch {
-        // Non-fatal
-      }
+      companyObj = gqlResp?.company || {};
+      teams = gqlResp?.teamsByCompany || [];
     }
 
     const rawExts = Array.isArray(companyObj.extensions)
@@ -241,27 +312,42 @@ export async function fetchQuickCompanyRoster(
       : [];
     const extensions: string[] = rawExts
       .map((e: unknown) => normalizeDomain(String(e)))
-      .filter(Boolean);
+      .filter((d) => isValidDomain(d) && !isDisallowedDirectoryDomain(d));
     const socialObj = companyObj.social as { websiteUrl?: string } | undefined;
     const rawWebsiteUrl = String(socialObj?.websiteUrl || '');
     const websiteDomain = rawWebsiteUrl ? normalizeDomain(rawWebsiteUrl) : '';
 
-    const hasVerifiedExt = extensions.some((d) => isValidDomain(d));
-    const resolvedDomain =
-      extensions.find((d) => isValidDomain(d)) ||
-      (isValidDomain(websiteDomain)
+    let resolvedDomain =
+      (websiteDomain &&
+      isValidDomain(websiteDomain) &&
+      !isDisallowedDirectoryDomain(websiteDomain)
         ? websiteDomain
-        : comp.domain && isValidDomain(comp.domain)
-        ? comp.domain
-        : buildFallbackDomainFromSlug(slug, comp.name));
+        : '') ||
+      extensions[0] ||
+      (comp.domain &&
+      isValidDomain(comp.domain) &&
+      !isSuspectGeneratedDomain(
+        comp.domain,
+        slug,
+        comp.name,
+        comp.sourceRegistry
+      )
+        ? normalizeDomain(comp.domain)
+        : '');
 
-    if (isValidDomain(resolvedDomain)) {
-      slugToDomainCache.set(slug, resolvedDomain);
-      slugToWebsiteCache.set(slug, {
-        domain: resolvedDomain,
-        websiteUrl: `https://${resolvedDomain}`,
-      });
+    if (!resolvedDomain) {
+      resolvedDomain = await resolveSingleRealCompanyDomain(comp.name, slug);
     }
+
+    if (!resolvedDomain || !isValidDomain(resolvedDomain)) {
+      return [];
+    }
+
+    slugToDomainCache.set(slug, resolvedDomain);
+    slugToWebsiteCache.set(slug, {
+      domain: resolvedDomain,
+      websiteUrl: `https://${resolvedDomain}`,
+    });
 
     const resolvedCompanyName =
       cleanWhitespace(String(companyObj?.name || comp.name)) ||
@@ -272,12 +358,7 @@ export async function fetchQuickCompanyRoster(
     const defaultFormula: EmailFormulaId =
       comp.employeeRange === '1 - 50' ? 'first_only' : 'first_dot_last';
     const defaultDef = getExcelFormulaDefinition(defaultFormula);
-    const baseConfidence =
-      hasVerifiedExt || isValidDomain(websiteDomain)
-        ? defaultFormula === 'first_only'
-          ? 85
-          : 88
-        : 78;
+    const baseConfidence = defaultFormula === 'first_only' ? 84 : 88;
 
     const nodeById = new Map<string, GraphQLOrgNode>();
     for (const n of initialNodes) {
@@ -343,7 +424,9 @@ export async function fetchQuickCompanyRoster(
       for (const m of team.members || []) {
         const fullName = cleanWhitespace(String(m?.fullName || ''));
         if (!fullName || fullName.split(' ').length < 2) continue;
-        const pSlug = String(m?.slug || slugifyName(fullName));
+        const pSlug = String(
+          m?.slug || m?.id || `${slugifyName(fullName)}-${slugifyName(teamName)}`
+        );
         if (candidates.has(pSlug)) continue;
         const jobTitle = cleanJobTitle(
           String(m?.role || teamName || 'Team Member'),
@@ -365,6 +448,52 @@ export async function fetchQuickCompanyRoster(
       }
     }
 
+    const officers = getCompanyOfficersBySlugOrDomain(slug, resolvedDomain);
+    for (const off of officers) {
+      const pSlug = slugifyName(off.fullName);
+      if (pSlug && !candidates.has(pSlug)) {
+        candidates.set(pSlug, {
+          id: `officer-${slug}-${pSlug}`,
+          fullName: off.fullName,
+          jobTitle: off.jobTitle,
+          orgDepth: 1,
+          reportCount: 3,
+          profileUrl: `https://${resolvedDomain}`,
+          source: 'Business Registry',
+        });
+      }
+    }
+
+    const confirmedHits = getConfirmedContactsForDomain(resolvedDomain);
+    for (const hit of confirmedHits) {
+      const pSlug = slugifyName(hit.fullName) || slugifyName(hit.email);
+      const existing = candidates.get(pSlug);
+      if (!existing) {
+        candidates.set(pSlug, {
+          id: `vault-confirmed-${slug}-${slugifyName(hit.email)}`,
+          fullName: hit.fullName,
+          jobTitle: hit.jobTitle || 'Verified Contact',
+          orgDepth: 2,
+          reportCount: 1,
+          profileUrl: hit.sourceUrl || `https://${resolvedDomain}`,
+          source: mapSourceFromEmailSource(
+            hit.emailSource,
+            'Public Web Verified'
+          ),
+          observedEmail: hit.email,
+          emailSource: hit.emailSource,
+          emailSourceUrl: hit.sourceUrl,
+        });
+      } else if (!existing.observedEmail) {
+        candidates.set(pSlug, {
+          ...existing,
+          observedEmail: hit.email,
+          emailSource: hit.emailSource,
+          emailSourceUrl: hit.sourceUrl,
+        });
+      }
+    }
+
     const roster: EmployeeRecord[] = Array.from(candidates.values()).map(
       (cand) => {
         const importanceScore = computeImportanceScore(
@@ -372,17 +501,21 @@ export async function fetchQuickCompanyRoster(
           cand.orgDepth ?? 3,
           cand.reportCount ?? 0
         );
-        const email = applyExcelEmailFormula(
-          cand.fullName,
-          resolvedDomain,
-          defaultFormula
-        );
+        const email =
+          cand.observedEmail ||
+          applyExcelEmailFormula(
+            cand.fullName,
+            resolvedDomain,
+            defaultFormula
+          );
         const { lastName, hasComplexParts } = splitFullNameForExcel(
           cand.fullName
         );
-        let acc = baseConfidence;
-        if (!lastName) acc = Math.max(52, acc - 14);
-        else if (hasComplexParts) acc = Math.max(66, acc - 4);
+        let acc = cand.observedEmail ? 99 : baseConfidence;
+        if (!cand.observedEmail) {
+          if (!lastName) acc = Math.max(54, acc - 15);
+          else if (hasComplexParts) acc = Math.max(66, acc - 4);
+        }
 
         return {
           id: cand.id,
@@ -394,7 +527,9 @@ export async function fetchQuickCompanyRoster(
           emailAccuracy: acc,
           emailFormulaId: defaultFormula,
           emailFormulaLabel: defaultDef.label,
-          emailVerifiedOnWeb: false,
+          emailVerifiedOnWeb: Boolean(cand.observedEmail),
+          emailSource: cand.emailSource,
+          emailSourceUrl: cand.emailSourceUrl,
           jobTitle: cand.jobTitle,
           industry: primaryIndustry,
           department: classifyDepartment(cand.jobTitle, cand.teamHint || ''),
@@ -410,6 +545,9 @@ export async function fetchQuickCompanyRoster(
       if (a.importanceScore !== b.importanceScore) {
         return a.importanceScore - b.importanceScore;
       }
+      if (a.emailVerifiedOnWeb !== b.emailVerifiedOnWeb) {
+        return a.emailVerifiedOnWeb ? -1 : 1;
+      }
       return a.fullName.localeCompare(b.fullName);
     });
 
@@ -417,10 +555,17 @@ export async function fetchQuickCompanyRoster(
       data: roster,
       expiresAt: Date.now() + CACHE_TTL_MS,
     });
+    if (roster.length > 0) {
+      saveVaultQuickRoster(slug, resolvedDomain, roster);
+    }
 
     const cachedPat = emailPatternCache.get(resolvedDomain.toLowerCase());
     if (cachedPat && cachedPat.expiresAt > Date.now()) {
-      return applyDetectedPatternToRoster(roster, cachedPat.data);
+      return applyDetectedPatternToRoster(roster, cachedPat.data, {
+        companyName: resolvedCompanyName,
+        domain: resolvedDomain,
+        industry: primaryIndustry,
+      });
     }
 
     return roster;
@@ -432,6 +577,13 @@ export async function fetchQuickCompanyRoster(
 export async function buildFilterExplorerResponse(
   req: Request
 ): Promise<FilterExplorerResponse> {
+  markUserApiActivity();
+  const fullCacheKey = JSON.stringify(req.query || {});
+  const cachedExplorer = filterExplorerRamCache.get(fullCacheKey);
+  if (cachedExplorer && cachedExplorer.expiresAt > Date.now()) {
+    return cachedExplorer.data;
+  }
+
   const companyParams = parseGlobalFilterParams(req);
   const contactSearch = String(req.query.contactSearch || '')
     .trim()
@@ -459,45 +611,81 @@ export async function buildFilterExplorerResponse(
     req.query.emailFormulaOverride || 'auto'
   ).trim() as EmailFormulaId | 'auto';
 
-  const directoryPayload = await resolveFilteredGlobalCompanies(companyParams);
+  // Fetch directory companies AND unified mathematical facets simultaneously
+  const [directoryPayload, facets] = await Promise.all([
+    resolveFilteredGlobalCompanies(companyParams),
+    computeFilterFacetsAndTotals(companyParams, {
+      contactSearch,
+      roleKeyword,
+      senioritiesCount: seniorities.length,
+      departmentsCount: departments.length,
+      minAccuracy,
+      maxAccuracy,
+    }),
+  ]);
 
   const allValidCompanies = directoryPayload.companies.filter((c) =>
-    Boolean(c.slug)
-  );
-  const companiesToExtract = allValidCompanies.slice(0, 65);
-
-  const rawCompanyRosters = await mapWithConcurrency(
-    companiesToExtract,
-    24,
-    (comp) => fetchQuickCompanyRoster(comp)
+    Boolean(c.slug && c.domain)
   );
 
-  const patternInputs = companiesToExtract
+  // Prioritize already-cached rosters + confirmed-email companies + TheOrg companies for instant extraction
+  const prioritizedForRosters = [...allValidCompanies]
+    .sort((a, b) => {
+      const aCached = quickRosterCache.has(a.slug.toLowerCase()) ? 1 : 0;
+      const bCached = quickRosterCache.has(b.slug.toLowerCase()) ? 1 : 0;
+      if (aCached !== bCached) return bCached - aCached;
+      const aTheOrg = a.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
+      const bTheOrg = b.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
+      if (aTheOrg !== bTheOrg) return bTheOrg - aTheOrg;
+      return (b.confirmedEmailCount || 0) - (a.confirmedEmailCount || 0);
+    })
+    .slice(0, 24);
+
+  const rawCompanyRosters = await Promise.race([
+    mapWithConcurrency(prioritizedForRosters, 16, (comp) =>
+      fetchQuickCompanyRoster(comp)
+    ),
+    new Promise<EmployeeRecord[][]>((resolve) =>
+      setTimeout(
+        () =>
+          resolve(
+            prioritizedForRosters.map(
+              (c) => quickRosterCache.get(c.slug.toLowerCase())?.data || []
+            )
+          ),
+        1500
+      )
+    ),
+  ]);
+
+  const patternInputs = prioritizedForRosters
     .map((comp, idx) => {
       const roster = rawCompanyRosters[idx] || [];
       const dom = (roster[0]?.domain || comp.domain || '').toLowerCase();
       return {
         domain: dom,
         companyName: roster[0]?.companyName || comp.name,
-        employees: roster.slice(0, 80),
+        employees: roster.slice(0, 60),
         employeeRange: comp.employeeRange,
       };
     })
     .filter((item) => Boolean(item.domain && isValidDomain(item.domain)));
 
+  // Apply cached patterns immediately (0ms) and warm uncached patterns non-blockingly in the background!
   const batchPatterns = await detectBatchCompanyEmailPatterns(
     patternInputs,
-    20
+    0
   );
 
   const companyRosters = rawCompanyRosters.map((roster, idx) => {
-    const dom = (
-      roster[0]?.domain ||
-      companiesToExtract[idx]?.domain ||
-      ''
-    ).toLowerCase();
+    const comp = prioritizedForRosters[idx];
+    const dom = (roster[0]?.domain || comp?.domain || '').toLowerCase();
     const detected = dom ? batchPatterns.get(dom) : undefined;
-    return applyDetectedPatternToRoster(roster, detected);
+    return applyDetectedPatternToRoster(roster, detected, {
+      companyName: comp?.name || '',
+      domain: dom,
+      industry: comp?.industry || 'Information Technology & Business Services',
+    });
   });
 
   const updatedCompanies = directoryPayload.companies.map((comp) => {
@@ -509,6 +697,10 @@ export async function buildFilterExplorerResponse(
     if (pat) {
       return {
         ...comp,
+        confirmedEmailCount:
+          pat.discoveredContacts.length > 0
+            ? pat.discoveredContacts.length
+            : comp.confirmedEmailCount,
         detectedFormulaId: pat.analysis.detectedFormulaId,
         detectedFormulaLabel: pat.analysis.formulaLabel,
         patternConfidence: pat.analysis.patternConfidence,
@@ -521,8 +713,8 @@ export async function buildFilterExplorerResponse(
     (r) => r.length > 0
   ).length;
 
-  if (allValidCompanies.length > 65) {
-    void mapWithConcurrency(allValidCompanies.slice(65, 165), 14, (comp) =>
+  if (allValidCompanies.length > 24) {
+    void mapWithConcurrency(allValidCompanies.slice(24, 54), 6, (comp) =>
       fetchQuickCompanyRoster(comp)
     );
   }
@@ -545,7 +737,6 @@ export async function buildFilterExplorerResponse(
         )
       : 25000;
 
-  const seenAllPersonDomain = new Set<string>();
   const seenMatchedPersonDomain = new Set<string>();
   const mergedEmployees: EmployeeRecord[] = [];
 
@@ -560,15 +751,14 @@ export async function buildFilterExplorerResponse(
         ? fullRoster.slice(0, maxAllowedPerCompany)
         : fullRoster;
     for (const emp of roster) {
-      const uniqueKey = `${emp.domain}:${emp.fullName.toLowerCase()}`;
-      seenAllPersonDomain.add(uniqueKey);
+      const uniqueKey = `${emp.domain}:${emp.id || emp.fullName.toLowerCase()}`;
 
       const resolvedEmail =
-        formulaOverride === 'auto'
+        formulaOverride === 'auto' || emp.emailVerifiedOnWeb
           ? emp.email
           : applyExcelEmailFormula(emp.fullName, emp.domain, formulaOverride);
       const resolvedAccuracy =
-        formulaOverride === 'auto'
+        formulaOverride === 'auto' || emp.emailVerifiedOnWeb
           ? emp.emailAccuracy
           : Math.max(62, emp.emailAccuracy - 6);
 
@@ -601,9 +791,11 @@ export async function buildFilterExplorerResponse(
         email: resolvedEmail,
         emailAccuracy: resolvedAccuracy,
         emailFormulaId:
-          formulaOverride === 'auto' ? emp.emailFormulaId : formulaOverride,
+          formulaOverride === 'auto' || emp.emailVerifiedOnWeb
+            ? emp.emailFormulaId
+            : formulaOverride,
         emailFormulaLabel:
-          formulaOverride === 'auto'
+          formulaOverride === 'auto' || emp.emailVerifiedOnWeb
             ? emp.emailFormulaLabel
             : overrideDef?.label,
       });
@@ -614,6 +806,9 @@ export async function buildFilterExplorerResponse(
     if (a.importanceScore !== b.importanceScore) {
       return a.importanceScore - b.importanceScore;
     }
+    if (a.emailVerifiedOnWeb !== b.emailVerifiedOnWeb) {
+      return a.emailVerifiedOnWeb ? -1 : 1;
+    }
     return a.fullName.localeCompare(b.fullName);
   });
 
@@ -622,10 +817,14 @@ export async function buildFilterExplorerResponse(
     rank: idx + 1,
   }));
 
+  const confirmedEmailsCount = rankedEmployees.filter(
+    (e) => e.emailVerifiedOnWeb
+  ).length;
+
   const { departmentBreakdown, seniorityBreakdown } =
     computeBreakdowns(rankedEmployees);
 
-  let totalMatchedContacts = 0;
+  // Use the EXACT same coherent totalMatchedCompanies & totalMatchedContacts as `/api/filter-facets` & `/api/industry-companies`!
   const totalOrgs = directoryPayload.totalCompanies;
   const hasContactFilter =
     Boolean(contactSearch) ||
@@ -635,50 +834,29 @@ export async function buildFilterExplorerResponse(
     minAccuracy > 50 ||
     maxAccuracy < 99;
 
+  let totalMatchedContacts = facets.totalMatchedContacts;
   if (totalOrgs === 0 || (hasContactFilter && rankedEmployees.length === 0)) {
     totalMatchedContacts = 0;
   } else if (
-    totalOrgs <= companiesToExtract.length &&
-    allValidCompanies.length <= companiesToExtract.length &&
-    rankedEmployees.length >= totalOrgs
+    totalOrgs <= prioritizedForRosters.length &&
+    allValidCompanies.length <= prioritizedForRosters.length
   ) {
     totalMatchedContacts = rankedEmployees.length;
   } else {
-    const rangeAvg =
-      updatedCompanies.length > 0
-        ? updatedCompanies.reduce(
-            (sum, c) => sum + estimateIndexedContactsForRange(c.employeeRange),
-            0
-          ) / updatedCompanies.length
-        : 95;
-    const empiricalUnfilteredAvg =
-      nonEmptyRostersCount > 0
-        ? Math.min(
-            maxAllowedPerCompany,
-            seenAllPersonDomain.size / nonEmptyRostersCount
-          )
-        : rangeAvg;
-    const baseContactsPerOrg = Math.min(
-      maxAllowedPerCompany,
-      Math.max(10, Math.round(rangeAvg * 0.55 + empiricalUnfilteredAvg * 0.45))
-    );
-    const contactFilterRatio =
-      seenAllPersonDomain.size > 0
-        ? rankedEmployees.length / seenAllPersonDomain.size
-        : 1;
-    const effectivePerOrg = baseContactsPerOrg * contactFilterRatio;
-
     totalMatchedContacts = Math.max(
       rankedEmployees.length,
-      Math.round(totalOrgs * effectivePerOrg)
+      facets.totalMatchedContacts
     );
   }
 
-  return {
+  const responsePayload: FilterExplorerResponse = {
     scopeTitle: directoryPayload.industryFullTitle,
-    totalMatchedCompanies: directoryPayload.totalCompanies,
+    totalMatchedCompanies: totalOrgs,
     totalMatchedContacts,
     sampledCompaniesCount: nonEmptyRostersCount,
+    confirmedEmailsCount,
+    vaultCompaniesCount: facets.vaultCompaniesCount,
+    liveFederatedCatalogTotal: facets.liveFederatedCatalogTotal,
     page: directoryPayload.page,
     totalPages: directoryPayload.totalPages,
     companies: updatedCompanies,
@@ -687,4 +865,15 @@ export async function buildFilterExplorerResponse(
     seniorityBreakdown,
     fetchedAt: new Date().toISOString(),
   };
+
+  if (filterExplorerRamCache.size > 250) {
+    const oldestKey = filterExplorerRamCache.keys().next().value;
+    if (oldestKey) filterExplorerRamCache.delete(oldestKey);
+  }
+  filterExplorerRamCache.set(fullCacheKey, {
+    data: responsePayload,
+    expiresAt: Date.now() + 90_000,
+  });
+
+  return responsePayload;
 }

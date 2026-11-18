@@ -4,6 +4,7 @@ import {
   Coins,
   CreditCard,
   Laptop,
+  Radar,
   ShieldCheck,
   Users,
 } from 'lucide-react';
@@ -76,6 +77,19 @@ export const AdminOverviewPanel: React.FC<AdminOverviewPanelProps> = ({
           >
             <Laptop className="h-3.5 w-3.5 text-sky-500" />
             <span>Device Anti-Spam</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigateSection('crawler')}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50 transition-colors cursor-pointer"
+          >
+            <Radar className="h-3.5 w-3.5" />
+            <span>
+              Worldwide Crawler
+              {snapshot.crawlerStats
+                ? ` (${snapshot.crawlerStats.vaultCompaniesCount.toLocaleString()} Vault)`
+                : ''}
+            </span>
           </button>
           <button
             type="button"

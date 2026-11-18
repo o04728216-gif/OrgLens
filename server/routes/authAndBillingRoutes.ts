@@ -73,7 +73,20 @@ authAndBillingRouter.post('/api/auth/signup', (req: Request, res: Response) => {
     const password = String(req.body?.password || '');
     const fullName = String(req.body?.fullName || '');
     const companyName = String(req.body?.companyName || '');
-    const device = req.body?.device || null;
+    const headerDeviceId = String(req.headers['x-orglens-device-id'] || '')
+      .trim()
+      .slice(0, 96);
+    const rawDevice =
+      req.body?.device && typeof req.body.device === 'object'
+        ? req.body.device
+        : {};
+    const device =
+      rawDevice.deviceInstallId || headerDeviceId
+        ? {
+            ...rawDevice,
+            deviceInstallId: rawDevice.deviceInstallId || headerDeviceId,
+          }
+        : req.body?.device || null;
 
     const result = registerNewUser({
       email,
@@ -108,7 +121,20 @@ authAndBillingRouter.post('/api/auth/login', (req: Request, res: Response) => {
       req.body?.identifier || req.body?.email || ''
     );
     const password = String(req.body?.password || '');
-    const device = req.body?.device || null;
+    const headerDeviceId = String(req.headers['x-orglens-device-id'] || '')
+      .trim()
+      .slice(0, 96);
+    const rawDevice =
+      req.body?.device && typeof req.body.device === 'object'
+        ? req.body.device
+        : {};
+    const device =
+      rawDevice.deviceInstallId || headerDeviceId
+        ? {
+            ...rawDevice,
+            deviceInstallId: rawDevice.deviceInstallId || headerDeviceId,
+          }
+        : req.body?.device || null;
 
     const result = authenticateUser({
       identifier,
@@ -223,11 +249,28 @@ authAndBillingRouter.post(
         return;
       }
 
+      const sealId = attachDeviceSealCookie(req, res);
+      const headerDeviceId = String(req.headers['x-orglens-device-id'] || '')
+        .trim()
+        .slice(0, 96);
+      const rawDevice =
+        req.body?.device && typeof req.body.device === 'object'
+          ? req.body.device
+          : {};
+      const device =
+        rawDevice.deviceInstallId || headerDeviceId
+          ? {
+              ...rawDevice,
+              deviceInstallId: rawDevice.deviceInstallId || headerDeviceId,
+            }
+          : req.body?.device || null;
+
       const result = changeSelfAccountPassword({
         userId: currentUser.id,
         currentPassword: String(req.body?.currentPassword || ''),
         newPassword: String(req.body?.newPassword || ''),
-        device: req.body?.device || null,
+        sealId,
+        device,
       });
 
       res.json({
@@ -250,9 +293,26 @@ authAndBillingRouter.post(
   (req: AuthenticatedRequest, res: Response) => {
     try {
       const currentUser = req.authUser!;
+      const sealId = attachDeviceSealCookie(req, res);
+      const headerDeviceId = String(req.headers['x-orglens-device-id'] || '')
+        .trim()
+        .slice(0, 96);
+      const rawDevice =
+        req.body?.device && typeof req.body.device === 'object'
+          ? req.body.device
+          : {};
+      const device =
+        rawDevice.deviceInstallId || headerDeviceId
+          ? {
+              ...rawDevice,
+              deviceInstallId: rawDevice.deviceInstallId || headerDeviceId,
+            }
+          : req.body?.device || null;
+
       const result = rotateSelfSessionToken({
         userId: currentUser.id,
-        device: req.body?.device || null,
+        sealId,
+        device,
       });
       res.json({
         token: result.token,

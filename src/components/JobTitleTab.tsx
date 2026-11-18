@@ -25,6 +25,7 @@ import {
   PaginationControls,
   PaginationLoadingBanner,
 } from './directory/PaginationControls';
+import { SwipeableTableContainer } from './directory/SwipeableTableContainer';
 
 interface JobTitleTabProps {
   sessionMode: SessionMode;
@@ -79,14 +80,14 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
 }) => {
   const [internalRoleFilter, setInternalRoleFilter] = useState('');
   const [internalPage, setInternalPage] = useState(1);
-  const [transitioningPage, setTransitioningPage] = useState<number | null>(
-    null
-  );
   const [requestedServerPage, setRequestedServerPage] = useState<number | null>(
     null
   );
+  const [localPageLoadingTarget, setLocalPageLoadingTarget] = useState<
+    number | null
+  >(null);
+  const localPageTimerRef = useRef<number | null>(null);
   const listTopRef = useRef<HTMLDivElement>(null);
-  const pageTimerRef = useRef<number | null>(null);
 
   const roleFilter =
     urlRoleQuery !== undefined ? urlRoleQuery : internalRoleFilter;
@@ -110,18 +111,18 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   };
 
   useEffect(() => {
-    return () => {
-      if (pageTimerRef.current !== null) {
-        window.clearTimeout(pageTimerRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (!isFilterLoading) {
       setRequestedServerPage(null);
     }
   }, [isFilterLoading]);
+
+  useEffect(() => {
+    return () => {
+      if (localPageTimerRef.current !== null) {
+        window.clearTimeout(localPageTimerRef.current);
+      }
+    };
+  }, []);
 
   const isViewingFilterCompany =
     sessionMode === 'filter' && Boolean(filterSelectedCompany);
@@ -290,14 +291,14 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   );
 
   const isPaginationLoading = useServerBatchPagination
-    ? isFilterLoading &&
-      (requestedServerPage !== null ||
+    ? requestedServerPage !== null ||
+      (isFilterLoading &&
         Boolean(filterResult && filterResult.page !== globalPage))
-    : transitioningPage !== null;
+    : localPageLoadingTarget !== null;
 
   const targetPaginationPage = useServerBatchPagination
     ? requestedServerPage ?? globalPage
-    : transitioningPage ?? safePage;
+    : localPageLoadingTarget ?? safePage;
 
   const handleSelectRolesPage = (nextPage: number) => {
     const bounded = Math.max(1, Math.min(totalPages, nextPage));
@@ -310,16 +311,16 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
       return;
     }
 
-    if (bounded === safePage && transitioningPage === null) return;
-    if (pageTimerRef.current !== null) {
-      window.clearTimeout(pageTimerRef.current);
+    if (bounded === safePage) return;
+    if (localPageTimerRef.current !== null) {
+      window.clearTimeout(localPageTimerRef.current);
     }
-    setTransitioningPage(bounded);
-    pageTimerRef.current = window.setTimeout(() => {
+    setLocalPageLoadingTarget(bounded);
+    localPageTimerRef.current = window.setTimeout(() => {
       updateCurrentPage(bounded);
-      setTransitioningPage(null);
-      pageTimerRef.current = null;
-    }, 200);
+      setLocalPageLoadingTarget(null);
+      localPageTimerRef.current = null;
+    }, 170);
   };
 
   const isInitialLoading =
@@ -356,8 +357,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
         </h4>
         <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
           Search any company domain above to map its Executive, Director / VP,
-          Lead / Senior, and Individual Contributor tiers with exact counts and
-          percentages.
+          Lead / Senior, and Individual Contributor authority tiers.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
           <button
@@ -395,21 +395,12 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 px-0.5">
           <span>
-            Authority distribution across{' '}
-            <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
-              {cohortBeforeSenioritySelection.length.toLocaleString()}
-            </strong>{' '}
+            Authority distribution
             {(sessionMode === 'domain' || isViewingFilterCompany) &&
             activeSingleCompanyResult
-              ? `${activeSingleCompanyResult.companyName} roles`
-              : 'filtered roles'}
+              ? ` · ${activeSingleCompanyResult.companyName}`
+              : ''}
           </span>
-          {sessionMode === 'filter' && !isViewingFilterCompany && isFilterLoading && (
-            <span className="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400 font-medium">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Refreshing hierarchy...
-            </span>
-          )}
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -434,9 +425,6 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
                 </p>
                 <div className="mt-1.5 flex items-baseline justify-between gap-2">
                   <span className="text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-                    {tier.count.toLocaleString()}
-                  </span>
-                  <span className="text-xs font-mono tabular-nums font-semibold text-sky-700 dark:text-sky-400">
                     {tier.percentage}%
                   </span>
                 </div>
@@ -456,16 +444,16 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
             onChange={(e) => setRoleFilter(e.target.value)}
             placeholder="Filter hierarchy by role or name (e.g., CEO, VP, Director, Engineer)..."
             aria-label="Filter command hierarchy"
-            className="w-full pl-9 pr-8 py-2 text-base sm:text-sm rounded-lg bg-white/80 dark:bg-slate-950/60 border border-slate-200/90 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 transition-colors"
+            className="w-full min-h-[44px] sm:min-h-0 pl-9 pr-8 py-2 text-base sm:text-sm rounded-lg bg-white/80 dark:bg-slate-950/60 border border-slate-200/90 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 transition-colors"
           />
           {roleFilter && (
             <button
               type="button"
               onClick={() => setRoleFilter('')}
               aria-label="Clear role filter"
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-4 w-4" />
             </button>
           )}
         </div>
@@ -481,7 +469,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
                   onSelectDepartment(dept);
                   updateCurrentPage(1);
                 }}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all duration-150 cursor-pointer whitespace-nowrap shrink-0 ${
+                className={`min-h-[36px] sm:min-h-0 px-3 py-1.5 sm:px-2.5 sm:py-1 text-xs font-medium rounded-md transition-all duration-150 cursor-pointer whitespace-nowrap shrink-0 ${
                   active
                     ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -494,7 +482,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
         </div>
       </div>
 
-      {/* Accurate Row Count Summary */}
+      {/* Authority Ordering Summary */}
       <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
         <span>
           {selectedSeniority !== 'All' ? (
@@ -509,21 +497,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
             'All authority tiers ordered Most Important → Least Important'
           )}
         </span>
-        <span className="font-mono tabular-nums whitespace-nowrap">
-          {filtered.length === 0
-            ? 'Showing 0 roles'
-            : `Showing ${(pageStartIndex + 1).toLocaleString()}–${(
-                pageStartIndex + displayed.length
-              ).toLocaleString()} of ${filtered.length.toLocaleString()} roles (500/page)`}
-        </span>
       </div>
-
-      {isPaginationLoading && (
-        <PaginationLoadingBanner
-          message={`Loading page ${targetPaginationPage.toLocaleString()} of ${totalPages.toLocaleString()}...`}
-          rightMeta="500 roles/page"
-        />
-      )}
 
       {/* Ranked Command Hierarchy HTML <table> */}
       {filtered.length === 0 ? (
@@ -533,92 +507,143 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
           </p>
         </div>
       ) : (
-        <div className="relative rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/55 dark:bg-slate-950/35">
+        <div className="space-y-3">
           {isPaginationLoading && (
-            <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex justify-center px-4">
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl backdrop-blur-md bg-white/95 dark:bg-slate-900/95 border border-sky-500/40 shadow-sm text-xs font-semibold text-slate-900 dark:text-white">
-                <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
-                <span>
-                  Loading page {targetPaginationPage.toLocaleString()}...
-                </span>
-              </div>
-            </div>
+            <PaginationLoadingBanner
+              message={`Loading page ${targetPaginationPage.toLocaleString()} of ${totalPages.toLocaleString()}...`}
+              rightMeta={
+                useServerBatchPagination
+                  ? 'Fetching hierarchy batch on demand'
+                  : 'Loading 500 roles'
+              }
+            />
           )}
           <div
-            className={`overflow-x-auto rounded-xl transition-opacity duration-150 ${
-              isPaginationLoading
-                ? 'opacity-45 pointer-events-none'
-                : 'opacity-100'
+            aria-busy={isPaginationLoading}
+            className={`relative transition-opacity duration-150 ${
+              isPaginationLoading ? 'opacity-55 pointer-events-none' : ''
             }`}
           >
+            {/* Mobile Touch Cards (md:hidden) */}
+            <div className="md:hidden space-y-2.5">
+            {displayed.map((emp) => (
+                <div
+                  key={emp.id}
+                  className="rounded-xl p-3.5 border border-slate-200/85 dark:border-slate-800/85 bg-white/85 dark:bg-slate-950/55 flex items-start justify-between gap-3"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-slate-500 shrink-0">
+                        #{emp.displayRank}
+                      </span>
+                      <span className="font-semibold text-sm text-slate-900 dark:text-white">
+                        {emp.jobTitle}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                      {emp.fullName}
+                    </p>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5">
+                      <span>{emp.seniority}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{emp.department}</span>
+                      {sessionMode === 'filter' && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{emp.companyName || emp.domain}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <a
+                    href={emp.profileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-h-[38px] px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 shrink-0 inline-flex items-center gap-1 text-xs font-medium text-sky-600 dark:text-sky-400"
+                  >
+                    <span>Profile</span>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+            ))}
+          </div>
+
+          {/* Desktop Compact & Seamlessly Swipeable Table (hidden md:block) */}
+          <SwipeableTableContainer compactHint="Drag left/right, Shift+Scroll, or tap arrows to view all hierarchy columns">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/75 dark:bg-slate-900/75 text-xs font-semibold text-slate-600 dark:text-slate-300">
-                  <th scope="col" className="py-3 px-4 w-16 font-mono">
-                    Rank
+                <tr className="border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-100/75 dark:bg-slate-900/75 text-[11px] uppercase tracking-wide font-semibold text-slate-600 dark:text-slate-300">
+                  <th scope="col" className="py-2.5 px-3 w-12 font-mono">
+                    #
                   </th>
-                  <th scope="col" className="py-3 px-4">
+                  <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                     Role &amp; Authority
                   </th>
-                  <th scope="col" className="py-3 px-4">
+                  <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                     Full Name
                   </th>
                   {sessionMode === 'filter' && (
-                    <th scope="col" className="py-3 px-4 hidden sm:table-cell">
+                    <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                       Organization
                     </th>
                   )}
-                  <th scope="col" className="py-3 px-4 hidden md:table-cell">
+                  <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                     Department
                   </th>
-                  <th scope="col" className="py-3 px-4 w-24 text-right">
-                    Link
+                  <th scope="col" className="py-2.5 px-3 text-right whitespace-nowrap">
+                    Profile
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm">
+              <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-xs sm:text-sm">
                 {displayed.map((emp) => (
-                  <tr
-                    key={emp.id}
-                    className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
-                  >
-                    <td className="py-2.5 px-4 font-mono tabular-nums text-xs text-slate-400 dark:text-slate-500">
-                      {emp.displayRank}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <div className="font-semibold text-slate-900 dark:text-slate-100">
-                        {emp.jobTitle}
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {emp.seniority}
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                      {emp.fullName}
-                    </td>
-                    {sessionMode === 'filter' && (
-                      <td className="py-2.5 px-4 text-xs text-slate-600 dark:text-slate-300 hidden sm:table-cell whitespace-nowrap">
-                        {emp.companyName || emp.domain}
+                    <tr
+                      key={emp.id}
+                      className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
+                    >
+                      <td className="py-2 px-3 font-mono tabular-nums text-xs text-slate-400 dark:text-slate-500">
+                        {emp.displayRank}
                       </td>
-                    )}
-                    <td className="py-2.5 px-4 text-xs text-slate-500 dark:text-slate-400 hidden md:table-cell whitespace-nowrap">
-                      {emp.department}
-                    </td>
-                    <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                      <a
-                        href={emp.profileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs font-medium text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300 transition-colors"
-                      >
-                        View
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
-                    </td>
-                  </tr>
+                      <td className="py-2 px-3 max-w-[260px]" title={emp.jobTitle}>
+                        <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                          {emp.jobTitle}
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {emp.seniority}
+                        </div>
+                      </td>
+                      <td className="py-2 px-3 whitespace-nowrap max-w-[190px]">
+                        <span className="font-medium text-slate-800 dark:text-slate-200 truncate max-w-[175px] block">
+                          {emp.fullName}
+                        </span>
+                      </td>
+                      {sessionMode === 'filter' && (
+                        <td className="py-2 px-3 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap max-w-[170px]">
+                          <span className="block truncate">
+                            {emp.companyName || emp.domain}
+                          </span>
+                        </td>
+                      )}
+                      <td className="py-2 px-3 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                        {emp.department}
+                      </td>
+                      <td className="py-2 px-3 text-right whitespace-nowrap">
+                        <a
+                          href={emp.profileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs font-medium text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300 transition-colors"
+                        >
+                          <span>View</span>
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      </td>
+                    </tr>
                 ))}
               </tbody>
             </table>
+          </SwipeableTableContainer>
           </div>
         </div>
       )}
@@ -631,6 +656,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
         perPageLabel={
           useServerBatchPagination ? '500 orgs/batch' : '500/page'
         }
+        loadingLabel={`Loading page ${targetPaginationPage.toLocaleString()}...`}
         onSelectPage={handleSelectRolesPage}
       />
     </div>

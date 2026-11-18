@@ -32,6 +32,14 @@
     touch-action: manipulation;
   }
 
+  /* Small placeholder text across all inputs & textareas site-wide */
+  input::placeholder,
+  textarea::placeholder {
+    font-size: 0.75rem !important;
+    line-height: 1rem !important;
+    font-weight: 400 !important;
+  }
+
   /* Prevent iOS Safari & mobile browsers from auto-zooming on input/select tap */
   @media (max-width: 1023px) {
     input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
@@ -48,6 +56,31 @@
   code, pre, .font-mono {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Smooth horizontal swipe scrollbar for PC results tables */
+  .swipe-table-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .swipe-table-scroll::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  .swipe-table-scroll::-webkit-scrollbar-track {
+    background: rgba(148, 163, 184, 0.08);
+    border-radius: 9999px;
+  }
+
+  .swipe-table-scroll::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.4);
+    border-radius: 9999px;
+  }
+
+  .swipe-table-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(14, 165, 233, 0.65);
   }
 
   .tabular-nums {

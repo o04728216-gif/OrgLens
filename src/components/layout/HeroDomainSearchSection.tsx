@@ -146,7 +146,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
 
       {/* Domain Search Form */}
       <form onSubmit={onSubmitDomain} className="mt-4">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3">
           <div className="relative flex-1 min-w-0">
             <Globe className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 dark:text-slate-500" />
             <input
@@ -156,7 +156,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
               onChange={(e) => onChangeDomainInput(e.target.value)}
               placeholder="Enter any company domain (e.g., shopify.com, vercel.com)"
               aria-label="Company domain name"
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl font-mono text-base sm:text-sm bg-white dark:bg-slate-950/80 border border-slate-300/90 dark:border-slate-800 text-slate-900 dark:text-white placeholder:font-sans placeholder:text-xs placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 transition-colors"
+              className="w-full min-h-[46px] sm:min-h-0 pl-10 pr-4 py-2.5 rounded-xl font-mono text-base sm:text-sm bg-white dark:bg-slate-950/80 border border-slate-300/90 dark:border-slate-800 text-slate-900 dark:text-white placeholder:font-sans placeholder:text-xs placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 transition-colors"
             />
           </div>
 
@@ -164,7 +164,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
             <button
               type="submit"
               disabled={isDomainLoading}
-              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-60 shadow-xs transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[46px] sm:min-h-0 flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-60 shadow-xs transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
             >
               {isDomainLoading ? (
                 <>
@@ -194,7 +194,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
                     onRefreshCurrentDomain(currentDomainResult.domain)
                   }
                   title="Refresh organization directory and verified contacts"
-                  className="px-4 py-2.5 rounded-xl text-sm font-medium border border-slate-200/90 dark:border-slate-800 bg-white/80 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
+                  className="min-h-[46px] sm:min-h-0 px-4 py-2.5 rounded-xl text-sm font-medium border border-slate-200/90 dark:border-slate-800 bg-white/80 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   Refresh
                 </button>

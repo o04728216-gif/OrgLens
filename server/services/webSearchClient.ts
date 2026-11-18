@@ -17,7 +17,7 @@ const YAHOO_SEARCH_ENDPOINTS = [
 ];
 
 let activeYahooRequests = 0;
-const MAX_CONCURRENT_YAHOO = 4;
+const MAX_CONCURRENT_YAHOO = 12;
 const yahooWaitQueue: Array<() => void> = [];
 let endpointRoundRobin = 0;
 
@@ -38,7 +38,7 @@ function releaseYahooSlot(): void {
   activeYahooRequests = Math.max(0, activeYahooRequests - 1);
   const next = yahooWaitQueue.shift();
   if (next) {
-    setTimeout(next, 90);
+    next();
   }
 }
 
@@ -46,56 +46,50 @@ export async function queryYahooSafe(
   query: string,
   offset = 1,
   count = 20,
-  timeoutMs = 6500
+  timeoutMs = 2200
 ): Promise<RawSearchHit[]> {
   await acquireYahooSlot();
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const endpoint =
-        YAHOO_SEARCH_ENDPOINTS[
-          (endpointRoundRobin++ + attempt) % YAHOO_SEARCH_ENDPOINTS.length
-        ];
-      try {
-        const response = await axios.get(endpoint, {
-          params: { p: query, n: count, b: offset },
-          timeout: timeoutMs,
-          headers: browserHeaders(),
-          validateStatus: (s) => s === 200,
-        });
+    const endpoint =
+      YAHOO_SEARCH_ENDPOINTS[
+        endpointRoundRobin++ % YAHOO_SEARCH_ENDPOINTS.length
+      ];
+    try {
+      const response = await axios.get(endpoint, {
+        params: { p: query, n: count, b: offset },
+        timeout: timeoutMs,
+        headers: browserHeaders(),
+        validateStatus: (s) => s === 200,
+      });
 
-        if (typeof response.data === 'string') {
-          const $ = cheerio.load(response.data);
-          const hits: RawSearchHit[] = [];
-          $('div.algo').each((_, el) => {
-            const h3 = $(el).find('h3').first();
-            if (!h3.length) return;
-            const h3Clone = h3.clone();
-            h3Clone.find('span.fz-ms, span.d-b').remove();
-            const title = cleanWhitespace(h3Clone.text() || h3.text());
-            const url =
-              h3.closest('a').attr('href') ||
-              h3.find('a').first().attr('href') ||
-              $(el)
-                .find('a[href*="RU="], a[href*="linkedin.com"]')
-                .first()
-                .attr('href') ||
-              '';
-            const snippet = cleanWhitespace(
-              $(el).find('.compText, p').first().text()
-            );
-            if (title && (url || snippet)) {
-              hits.push({ title, url, snippet });
-            }
-          });
-          if (hits.length > 0 || attempt === 1) {
-            return hits;
+      if (typeof response.data === 'string') {
+        const $ = cheerio.load(response.data);
+        const hits: RawSearchHit[] = [];
+        $('div.algo').each((_, el) => {
+          const h3 = $(el).find('h3').first();
+          if (!h3.length) return;
+          const h3Clone = h3.clone();
+          h3Clone.find('span.fz-ms, span.d-b').remove();
+          const title = cleanWhitespace(h3Clone.text() || h3.text());
+          const url =
+            h3.closest('a').attr('href') ||
+            h3.find('a').first().attr('href') ||
+            $(el)
+              .find('a[href*="RU="], a[href*="linkedin.com"]')
+              .first()
+              .attr('href') ||
+            '';
+          const snippet = cleanWhitespace(
+            $(el).find('.compText, p').first().text()
+          );
+          if (title && (url || snippet)) {
+            hits.push({ title, url, snippet });
           }
-        }
-      } catch {
-        if (attempt === 0) {
-          await new Promise((r) => setTimeout(r, 160));
-        }
+        });
+        return hits;
       }
+    } catch {
+      // Fast non-blocking fallback to parallel Bing/TheOrg engines
     }
     return [];
   } finally {
@@ -105,13 +99,14 @@ export async function queryYahooSafe(
 
 export async function queryBingRss(
   query: string,
-  first = 1
+  first = 1,
+  timeoutMs = 2100
 ): Promise<RawSearchHit[]> {
   const hits: RawSearchHit[] = [];
   try {
     const response = await axios.get('https://www.bing.com/search', {
       params: { format: 'rss', q: query, count: 30, first },
-      timeout: 5500,
+      timeout: timeoutMs,
       headers: browserHeaders(),
       validateStatus: (s) => s === 200,
     });
@@ -131,12 +126,15 @@ export async function queryBingRss(
   return hits;
 }
 
-export async function queryBingHtml(query: string): Promise<RawSearchHit[]> {
+export async function queryBingHtml(
+  query: string,
+  timeoutMs = 2100
+): Promise<RawSearchHit[]> {
   const hits: RawSearchHit[] = [];
   try {
     const response = await axios.get('https://www.bing.com/search', {
       params: { q: query, count: 30 },
-      timeout: 5500,
+      timeout: timeoutMs,
       headers: browserHeaders(),
       validateStatus: (s) => s === 200,
     });
@@ -160,7 +158,8 @@ export async function queryBingHtml(query: string): Promise<RawSearchHit[]> {
 }
 
 export async function queryDuckDuckGoHtml(
-  query: string
+  query: string,
+  timeoutMs = 2000
 ): Promise<RawSearchHit[]> {
   const hits: RawSearchHit[] = [];
   try {
@@ -169,7 +168,7 @@ export async function queryDuckDuckGoHtml(
       'https://html.duckduckgo.com/html/',
       params.toString(),
       {
-        timeout: 5500,
+        timeout: timeoutMs,
         headers: browserHeaders({
           'Content-Type': 'application/x-www-form-urlencoded',
           Origin: 'https://html.duckduckgo.com',
@@ -201,7 +200,7 @@ export async function queryDuckDuckGoHtml(
  */
 export async function queryPgpKeyserverEmails(
   domain: string,
-  timeoutMs = 3500
+  timeoutMs = 1700
 ): Promise<PgpEmailHit[]> {
   const cleanDom = domain.trim().toLowerCase();
   if (!cleanDom) return [];

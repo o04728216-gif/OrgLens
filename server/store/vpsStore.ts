@@ -56,6 +56,7 @@ export interface StoredUserRecord {
 export interface StoredSessionRecord {
   token: string;
   userId: string;
+  deviceId?: string;
   deviceLabel?: string;
   platform?: string;
   timezone?: string;
@@ -433,6 +434,8 @@ export function toPublicUser(user: StoredUserRecord): UserAccountPublic {
       ? [...user.unlockedCompanies].reverse()
       : [],
     activeSessionsCount: activeUserSessions.length,
+    activeSessionDeviceId:
+      latestSession?.deviceId || boundDevice?.deviceInstallId || undefined,
     activeSessionDeviceLabel:
       latestSession?.deviceLabel || boundDevice?.deviceLabel || 'Active Browser Session',
     activeSessionPlatform:
@@ -536,7 +539,9 @@ function findMatchingRegisteredDevice(
 ): RegisteredDeviceRecord | undefined {
   return db.registeredDevices.find((rec) => {
     if (rec.status === 'released') return false;
+    // 1. Authoritative unique server-signed browser seal
     if (sealId && rec.sealId && rec.sealId === sealId) return true;
+    // 2. Authoritative unique persistent Device Installation ID (unique per phone/PC browser)
     if (
       devicePayload?.deviceInstallId &&
       rec.deviceInstallId &&
@@ -544,19 +549,25 @@ function findMatchingRegisteredDevice(
     ) {
       return true;
     }
+    // 3. Hardware fallback ONLY if no distinct per-device Install ID exists.
+    // Different users can own identical iPhone/Android/PC models with matching hardware/GPU/screen metrics;
+    // distinct valid did_... IDs must never collide just because two phones/PCs share the same model.
+    const hasDistinctInstallIds = Boolean(
+      rec.deviceInstallId?.startsWith('did_') &&
+        devicePayload?.deviceInstallId?.startsWith('did_') &&
+        rec.deviceInstallId !== devicePayload.deviceInstallId
+    );
     if (
       includeHardwareMatch &&
+      !hasDistinctInstallIds &&
       devicePayload?.hardwareHash &&
       devicePayload.hardwareHash.length >= 16 &&
       rec.hardwareHash === devicePayload.hardwareHash
     ) {
-      // Hardware hash includes GPU vendor/renderer/limits, screen geometry, CPU cores, RAM, audio DSP, and timezone.
-      // Matching canvasFontHash or hardwareHash locks the physical device across cleared cookies & incognito windows.
       if (
         !rec.canvasFontHash ||
         !devicePayload.canvasFontHash ||
-        rec.canvasFontHash === devicePayload.canvasFontHash ||
-        rec.screenProfile === devicePayload.screenProfile
+        rec.canvasFontHash === devicePayload.canvasFontHash
       ) {
         return true;
       }
@@ -578,9 +589,13 @@ function appendLedgerEntry(entry: Omit<CoinLedgerEntry, 'id' | 'createdAt'>) {
 function createSessionForUser(
   userId: string,
   deviceInfo?: Partial<DeviceRegistrationPayload> | null,
-  displaceReason: 'another_device' | 'password_changed' = 'another_device'
+  displaceReason: 'another_device' | 'password_changed' = 'another_device',
+  sealId?: string | null
 ): { token: string; displacedCount: number } {
   const nowIso = new Date().toISOString();
+  const currentDeviceId =
+    String(deviceInfo?.deviceInstallId || sealId || '').trim().slice(0, 96) ||
+    `dev_${crypto.randomBytes(6).toString('hex')}`;
   const deviceLabel =
     String(deviceInfo?.deviceLabel || '').trim().slice(0, 140) ||
     'Active Browser Workstation';
@@ -589,14 +604,17 @@ function createSessionForUser(
   const timezone =
     String(deviceInfo?.timezone || '').trim().slice(0, 64) || 'UTC';
 
-  // Enforce strict ONE-DEVICE-LOGIN-AT-A-TIME: revoke every prior active session for this user
+  // Enforce strict ONE-DEVICE-LOGIN-AT-A-TIME keyed by unique Device ID:
+  // revoke every prior active session for this user so only 1 Device ID can hold an active session.
   let displacedCount = 0;
   db.sessions = db.sessions.filter((existing) => {
     if (existing.userId !== userId) return true;
-    displacedCount += 1;
+    if (!existing.deviceId || existing.deviceId !== currentDeviceId) {
+      displacedCount += 1;
+    }
     rememberDisplacedToken(existing.token, {
       displacedAt: nowIso,
-      newDeviceLabel: deviceLabel,
+      newDeviceLabel: `${deviceLabel} (${currentDeviceId.slice(0, 12)})`,
       reason: displaceReason,
     });
     return false;
@@ -608,6 +626,7 @@ function createSessionForUser(
   db.sessions.push({
     token,
     userId,
+    deviceId: currentDeviceId,
     deviceLabel,
     platform,
     timezone,
@@ -854,7 +873,12 @@ export function registerNewUser(input: {
     note: `Account initialized (${initialCoins} Lens Coins)`,
   });
 
-  const { token } = createSessionForUser(record.id, sanitizedDevice);
+  const { token } = createSessionForUser(
+    record.id,
+    sanitizedDevice,
+    'another_device',
+    sealId
+  );
   persistDatabaseToDisk(db);
 
   return { token, user: toPublicUser(record) };
@@ -921,7 +945,8 @@ export function authenticateUser(input: {
   const { token, displacedCount } = createSessionForUser(
     user.id,
     sanitizedDevice,
-    'another_device'
+    'another_device',
+    sealId
   );
   persistDatabaseToDisk(db);
 
@@ -932,7 +957,10 @@ export function authenticateUser(input: {
   };
 }
 
-export function inspectSessionToken(token: string): {
+export function inspectSessionToken(
+  token: string,
+  requestDeviceId?: string
+): {
   user: StoredUserRecord | null;
   code?: 'SESSION_DISPLACED' | 'PASSWORD_CHANGED' | 'AUTH_REQUIRED';
   message?: string;
@@ -986,6 +1014,26 @@ export function inspectSessionToken(token: string): {
       code: 'AUTH_REQUIRED',
       message: 'Session expired. Please sign in again.',
     };
+  }
+
+  // Enforce strict Device ID binding per session:
+  // Two identical phone/PC models still have distinct unique Device IDs; a session bound to Device ID A
+  // cannot be reused concurrently from Device ID B.
+  if (requestDeviceId) {
+    if (!session.deviceId) {
+      session.deviceId = requestDeviceId;
+    } else if (
+      session.deviceId.startsWith('did_') &&
+      requestDeviceId.startsWith('did_') &&
+      session.deviceId !== requestDeviceId
+    ) {
+      return {
+        user: null,
+        code: 'SESSION_DISPLACED',
+        message:
+          'This session is locked to a different Device ID. Please sign in on this device.',
+      };
+    }
   }
 
   ensureRootAdminIntegrity(db);
@@ -1123,6 +1171,7 @@ export function changeSelfAccountPassword(params: {
   userId: string;
   currentPassword: string;
   newPassword: string;
+  sealId?: string | null;
   device?: Partial<DeviceRegistrationPayload> | null;
 }): { token: string; user: UserAccountPublic } {
   const user = db.users.find((u) => u.id === params.userId);
@@ -1158,7 +1207,8 @@ export function changeSelfAccountPassword(params: {
   const { token } = createSessionForUser(
     user.id,
     sanitizedDevice,
-    'password_changed'
+    'password_changed',
+    params.sealId
   );
   persistDatabaseToDisk(db);
   return { token, user: toPublicUser(user) };
@@ -1166,6 +1216,7 @@ export function changeSelfAccountPassword(params: {
 
 export function rotateSelfSessionToken(params: {
   userId: string;
+  sealId?: string | null;
   device?: Partial<DeviceRegistrationPayload> | null;
 }): { token: string; user: UserAccountPublic } {
   const user = db.users.find((u) => u.id === params.userId);
@@ -1174,7 +1225,8 @@ export function rotateSelfSessionToken(params: {
   const { token } = createSessionForUser(
     user.id,
     sanitizedDevice,
-    'another_device'
+    'another_device',
+    params.sealId
   );
   persistDatabaseToDisk(db);
   return { token, user: toPublicUser(user) };

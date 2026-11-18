@@ -9,6 +9,7 @@ import type {
 import { apiFetch } from '../../utils/authClient';
 import { AdminLoginGate } from './AdminLoginGate';
 import { AdminSidebar } from './AdminSidebar';
+import { AdminCrawlerPanel } from './panels/AdminCrawlerPanel';
 import { AdminDevicesPanel } from './panels/AdminDevicesPanel';
 import {
   AdminLedgerPanel,
@@ -184,6 +185,13 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                 <AdminOverviewPanel
                   snapshot={snapshot}
                   onNavigateSection={onSelectSection}
+                />
+              )}
+              {activeSection === 'crawler' && (
+                <AdminCrawlerPanel
+                  crawlerStats={snapshot.crawlerStats}
+                  onRefresh={handleRefreshAll}
+                  onFeedback={showFeedback}
                 />
               )}
               {activeSection === 'users' && (

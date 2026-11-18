@@ -7,6 +7,7 @@ export type SubscriptionPlan = 'starter' | 'unlimited';
 
 export type AdminSectionId =
   | 'overview'
+  | 'crawler'
   | 'users'
   | 'devices'
   | 'payments'
@@ -93,6 +94,7 @@ export interface UserAccountPublic {
   unlockedCompaniesPreview?: string[];
   unlockedCompaniesList?: string[];
   activeSessionsCount?: number;
+  activeSessionDeviceId?: string;
   activeSessionDeviceLabel?: string;
   activeSessionPlatform?: string;
   activeSessionTimezone?: string;
@@ -251,6 +253,37 @@ export interface ServerCacheStats {
   globalIndustriesCached: boolean;
 }
 
+export interface RegistryFederationItem {
+  registryKey: string;
+  label: string;
+  liveReportedTotal: number;
+  vaultIndexedCount: number;
+  endpointUrl: string;
+  lastSyncedAt: string;
+}
+
+export interface CrawlerStreamCursor {
+  streamKey: string;
+  cursorValue: string;
+  itemsIngested: number;
+  lastCrawledAt: string;
+  lastStatus: string;
+}
+
+export interface CrawlerVaultStats {
+  vaultCompaniesCount: number;
+  confirmedContactsCount: number;
+  confirmedDomainsCount: number;
+  liveFederatedCatalogTotal: number;
+  daemonRunning: boolean;
+  daemonActiveCycle: boolean;
+  lastCycleAt: string | null;
+  totalCyclesRun: number;
+  sqliteFilePath: string;
+  registries: RegistryFederationItem[];
+  streams: CrawlerStreamCursor[];
+}
+
 export interface AdminDashboardSnapshot {
   stats: {
     totalUsers: number;
@@ -285,4 +318,6 @@ export interface AdminDashboardSnapshot {
   vouchers: PromoVoucher[];
   settings: PlatformSettings;
   cacheStats: ServerCacheStats;
+  crawlerStats?: CrawlerVaultStats;
 }
+
