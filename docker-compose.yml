@@ -1,0 +1,21 @@
+# Coolify & Docker Compose deployment with persistent named volume.
+# Redeploys from GitHub only rebuild the app container and NEVER touch
+# orglens_data (/app/data), preserving all signed-up users, custom Root Admin
+# credentials, billing records, and the worldwide SQLite directory.
+services:
+  orglens:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - ORGLENS_DATA_DIR=/app/data
+    volumes:
+      - orglens_data:/app/data
+    expose:
+      - "3000"
+    restart: unless-stopped
+
+volumes:
+  orglens_data:

@@ -309,6 +309,17 @@ export interface AdminDashboardSnapshot {
     usingDefaultPassword: boolean;
     storageFilePath: string;
     backupFileExists: boolean;
+    storageDiagnostics?: {
+      authDbName: string;
+      vaultDbName: string;
+      authStoragePath: string;
+      vaultStoragePath: string;
+      activeDataDir: string;
+      isContainerRuntime: boolean;
+      isPersistentVolumeMounted: boolean;
+      detectedMountPoint: string | null;
+      recommendedCoolifyMountPath: string;
+    };
   };
   users: UserAccountPublic[];
   devices: RegisteredDeviceRecord[];

@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
+  Database,
   Download,
   Lock,
   RefreshCw,
@@ -331,6 +333,11 @@ export const AdminSystemPanel: React.FC<AdminSystemPanelProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [updatingRoot, setUpdatingRoot] = useState(false);
 
+  useEffect(() => {
+    setNewEmail(rootAdminShield.rootEmail);
+    setNewUsername(rootAdminShield.rootUsername);
+  }, [rootAdminShield.rootEmail, rootAdminShield.rootUsername]);
+
   const handleFlushCache = async (
     target: 'all' | 'domains' | 'patterns' | 'rosters' | 'directory' | 'mx'
   ) => {
@@ -614,43 +621,95 @@ export const AdminSystemPanel: React.FC<AdminSystemPanelProps> = ({
         </div>
       </div>
 
-      {/* VPS Portable Backup & Restore */}
-      <div className="rounded-xl p-6 bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-xs">
-        <div className="space-y-1">
-          <h2 className="font-display text-sm font-bold text-slate-900 dark:text-white">
-            Portable VPS Snapshot Backup &amp; Restore
-          </h2>
-          <p className="text-slate-500 dark:text-slate-400">
-            Active file: <code className="font-mono">{rootAdminShield.storageFilePath}</code>{' '}
-            · Automatic .bak recovery:{' '}
-            {rootAdminShield.backupFileExists ? 'Ready' : 'Created on next write'}
-          </p>
-          <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
-            100% server-IP portable: restoring this JSON on any new server/IP automatically brings back all signed-up users, passwords, coins, unlimited plans, payments, vouchers, devices, and Root Admin credentials.
-          </p>
+      {/* VPS Portable Backup & Restore + Coolify Persistent Storage */}
+      <div className="rounded-xl p-6 bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 space-y-4 text-xs">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h2 className="font-display text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Database className="h-4 w-4 text-sky-500" />
+              <span>Portable VPS Snapshot Backup &amp; Restore</span>
+            </h2>
+            <p className="text-slate-500 dark:text-slate-400">
+              Users &amp; Admin DB:{' '}
+              <code className="font-mono text-slate-700 dark:text-slate-200">
+                {rootAdminShield.storageDiagnostics?.authDbName || 'orglens-vps-db.json'}
+              </code>{' '}
+              · Company Index DB:{' '}
+              <code className="font-mono text-slate-700 dark:text-slate-200">
+                {rootAdminShield.storageDiagnostics?.vaultDbName ||
+                  'worldwide-companies.sqlite'}
+              </code>
+            </p>
+            <p className="text-slate-500 dark:text-slate-400">
+              Active path:{' '}
+              <code className="font-mono">{rootAdminShield.storageFilePath}</code>{' '}
+              · Automatic .bak &amp; SQLite mirror:{' '}
+              {rootAdminShield.backupFileExists ? 'Ready' : 'Created on next write'}
+            </p>
+            <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+              100% server-IP portable: restoring this JSON on any new server/IP
+              automatically brings back all signed-up users, passwords, coins,
+              unlimited plans, payments, vouchers, devices, and Root Admin
+              credentials.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => void handleExportBackup()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-semibold bg-slate-900 dark:bg-slate-800 text-white cursor-pointer"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Export JSON Backup</span>
+            </button>
+
+            <label className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-semibold border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
+              <Upload className="h-3.5 w-3.5" />
+              <span>Restore JSON</span>
+              <input
+                type="file"
+                accept="application/json"
+                onChange={(e) => void handleImportBackup(e)}
+                className="hidden"
+              />
+            </label>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => void handleExportBackup()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-semibold bg-slate-900 dark:bg-slate-800 text-white cursor-pointer"
+        {rootAdminShield.storageDiagnostics && (
+          <div
+            className={`rounded-lg p-3.5 border ${
+              rootAdminShield.storageDiagnostics.isPersistentVolumeMounted
+                ? 'bg-emerald-500/5 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+                : rootAdminShield.storageDiagnostics.isContainerRuntime
+                ? 'bg-amber-500/10 border-amber-500/40 text-amber-900 dark:text-amber-200'
+                : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300'
+            }`}
           >
-            <Download className="h-3.5 w-3.5" />
-            <span>Export JSON Backup</span>
-          </button>
-
-          <label className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-semibold border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
-            <Upload className="h-3.5 w-3.5" />
-            <span>Restore JSON</span>
-            <input
-              type="file"
-              accept="application/json"
-              onChange={(e) => void handleImportBackup(e)}
-              className="hidden"
-            />
-          </label>
-        </div>
+            <div className="flex items-start gap-2.5">
+              {rootAdminShield.storageDiagnostics.isPersistentVolumeMounted ? (
+                <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1 text-[11px] leading-relaxed">
+                <div className="font-semibold">
+                  {rootAdminShield.storageDiagnostics.isPersistentVolumeMounted
+                    ? `Coolify / Docker Persistent Volume Mounted (${rootAdminShield.storageDiagnostics.detectedMountPoint}) — Redeploy Safe`
+                    : rootAdminShield.storageDiagnostics.isContainerRuntime
+                    ? `Ephemeral Container Disk Detected — Mount ${rootAdminShield.storageDiagnostics.recommendedCoolifyMountPath} in Coolify Storages`
+                    : `Local Embedded Storage Active (${rootAdminShield.storageDiagnostics.activeDataDir})`}
+                </div>
+                <div>
+                  {rootAdminShield.storageDiagnostics.isPersistentVolumeMounted
+                    ? 'GitHub redeploys only replace the app container and leave your users, custom Root Admin login, and worldwide SQLite directory completely untouched.'
+                    : `To keep all signed-up users and custom Admin credentials across every GitHub push in Coolify, attach one Persistent Storage volume with Destination Path: ${rootAdminShield.storageDiagnostics.recommendedCoolifyMountPath} (or deploy using the included docker-compose.yml).`}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

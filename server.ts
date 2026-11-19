@@ -66,6 +66,46 @@ const bootstrapPromise = (async () => {
     mountedFrontendHandler = prodRouter;
   }
 
+  const { getStoragePersistenceDiagnostics } = await import(
+    './server/store/persistentDataDir.ts'
+  );
+  const storageDiag = getStoragePersistenceDiagnostics();
+  console.log(
+    `[OrgLens Storage] Auth DB: ${storageDiag.authStoragePath} | Vault DB: ${storageDiag.vaultStoragePath} | Persistent Volume: ${
+      storageDiag.isPersistentVolumeMounted
+        ? `MOUNTED (${storageDiag.detectedMountPoint})`
+        : storageDiag.isContainerRuntime
+        ? `NOT MOUNTED — attach Persistent Storage to ${storageDiag.recommendedCoolifyMountPath} in Coolify to retain data across redeploys`
+        : 'LOCAL HOST DISK'
+    }`
+  );
+
+  const registerGracefulShutdown = () => {
+    let shuttingDown = false;
+    const handleSignal = async (signal: string) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`[OrgLens] Received ${signal}, flushing databases cleanly...`);
+      try {
+        const [{ flushVpsStoreSync }, { checkpointAndCloseVaultDb }] =
+          await Promise.all([
+            import('./server/store/vpsStore.ts'),
+            import('./server/store/companyVaultDb.ts'),
+          ]);
+        flushVpsStoreSync();
+        checkpointAndCloseVaultDb();
+      } catch (err) {
+        console.error('[OrgLens] Error flushing databases on shutdown:', err);
+      } finally {
+        httpServer.close(() => process.exit(0));
+        setTimeout(() => process.exit(0), 2500).unref();
+      }
+    };
+    process.once('SIGTERM', () => void handleSignal('SIGTERM'));
+    process.once('SIGINT', () => void handleSignal('SIGINT'));
+  };
+  registerGracefulShutdown();
+
   // Defer background crawler & directory cache warm-up until after server + Vite are 100% ready
   setTimeout(() => {
     void (async () => {

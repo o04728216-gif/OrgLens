@@ -328,6 +328,12 @@ function getDb(): DatabaseSync {
       payload_json TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS platform_auth_backup (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   runVaultStartupMaintenance(db);
@@ -1895,3 +1901,65 @@ export function getFullCrawlerVaultStats(daemonMeta: {
     streams,
   };
 }
+
+/**
+ * Mirrors the serialized user/admin/billing JSON database into SQLite
+ * (`platform_auth_backup`) inside the same persistent data directory so
+ * even a corrupted/truncated JSON file auto-heals on boot without losing users.
+ */
+export function savePlatformAuthBackupToSqlite(serializedJson: string): void {
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO platform_auth_backup (id, payload_json, updated_at)
+       VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         updated_at = excluded.updated_at`
+    ).run(serializedJson, new Date().toISOString());
+  } catch {
+    // Non-fatal mirror write
+  }
+}
+
+export function loadPlatformAuthBackupFromSqlite(): {
+  payloadJson: string;
+  updatedAt: string;
+} | null {
+  try {
+    if (!fs.existsSync(SQLITE_VAULT_PATH)) return null;
+    const db = getDb();
+    const row = db
+      .prepare(
+        `SELECT payload_json, updated_at FROM platform_auth_backup WHERE id = 1`
+      )
+      .get() as { payload_json?: string; updated_at?: string } | undefined;
+    if (!row?.payload_json) return null;
+    return {
+      payloadJson: row.payload_json,
+      updatedAt: row.updated_at || new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Flushes SQLite WAL into the main database file cleanly on SIGTERM/SIGINT
+ * during Coolify/Docker redeploys so no recent writes remain only in -wal.
+ */
+export function checkpointAndCloseVaultDb(): void {
+  if (!dbInstance) return;
+  try {
+    dbInstance.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  } catch {
+    // Ignore checkpoint errors during shutdown
+  }
+  try {
+    dbInstance.close();
+  } catch {
+    // Ignore close errors during shutdown
+  }
+  dbInstance = null;
+}
+

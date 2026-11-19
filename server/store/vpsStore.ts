@@ -20,7 +20,14 @@ import type {
   UserStatus,
   UserWorkspacePreferences,
 } from '../../src/types/platformTypes.ts';
-import { resolveAuthStoragePaths } from './persistentDataDir.ts';
+import {
+  getStoragePersistenceDiagnostics,
+  resolveAuthStoragePaths,
+} from './persistentDataDir.ts';
+import {
+  loadPlatformAuthBackupFromSqlite,
+  savePlatformAuthBackupToSqlite,
+} from './companyVaultDb.ts';
 
 export const ROOT_ADMIN_ID = 'root-admin-permanent';
 export const DEVICE_SEAL_COOKIE_NAME = 'ol_dseal';
@@ -366,8 +373,34 @@ function loadDatabaseFromDisk(): VpsDatabaseSchema {
     }
   }
 
+  // Also check SQLite cross-backup mirror (`platform_auth_backup` inside worldwide-companies.sqlite)
+  try {
+    const sqliteBackup = loadPlatformAuthBackupFromSqlite();
+    if (sqliteBackup?.payloadJson) {
+      const parsed = JSON.parse(sqliteBackup.payloadJson) as VpsDatabaseSchema;
+      if (parsed && typeof parsed === 'object') {
+        const { state, migrated } = ensureRootAdminIntegrity(parsed);
+        const mtimeMs = Date.parse(sqliteBackup.updatedAt) || Date.now();
+        const score = scoreRecoveredDatabase(state, mtimeMs);
+        if (
+          bestState === null ||
+          score > bestScore ||
+          (score === bestScore && mtimeMs > bestMtime)
+        ) {
+          bestState = state;
+          bestScore = score;
+          bestMtime = mtimeMs;
+          bestPath = 'sqlite:platform_auth_backup';
+          bestMigrated = migrated;
+        }
+      }
+    }
+  } catch {
+    // Non-fatal SQLite backup fallback
+  }
+
   if (bestState) {
-    // Self-heal primary & mirror paths if we recovered from an external/mirror/bak copy after redeploy
+    // Self-heal primary & mirror paths if we recovered from an external/mirror/bak/sqlite copy after redeploy
     if (bestMigrated || bestPath !== DB_FILE_PATH || !fs.existsSync(DB_FILE_PATH)) {
       persistDatabaseToDisk(bestState);
     }
@@ -460,6 +493,9 @@ function persistDatabaseToDisk(state: VpsDatabaseSchema): void {
       // Best-effort secondary mirror for redeploy resilience
     }
   }
+
+  // Secondary cross-database mirror inside worldwide-companies.sqlite on the same persistent volume
+  savePlatformAuthBackupToSqlite(serialized);
 }
 
 let scheduledFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -469,6 +505,14 @@ function scheduleDatabaseFlush(): void {
     scheduledFlushTimer = null;
     persistDatabaseToDisk(db);
   }, 25);
+}
+
+export function flushVpsStoreSync(): void {
+  if (scheduledFlushTimer) {
+    clearTimeout(scheduledFlushTimer);
+    scheduledFlushTimer = null;
+  }
+  persistDatabaseToDisk(db);
 }
 
 const db: VpsDatabaseSchema = loadDatabaseFromDisk();
@@ -1794,6 +1838,7 @@ export function getAdminStoreSnapshot() {
       usingDefaultPassword: Boolean(root.usingDefaultPassword),
       storageFilePath: DB_FILE_PATH,
       backupFileExists: fs.existsSync(DB_BACKUP_PATH),
+      storageDiagnostics: getStoragePersistenceDiagnostics(),
     },
     users: publicUsers,
     devices: db.registeredDevices,
@@ -2505,15 +2550,46 @@ export function importFullVpsBackup(payload: unknown): RestoreVpsBackupSummary {
     const incomingRoot = incoming.users.find(
       (u) => u && (u.id === ROOT_ADMIN_ID || u.isRootAdmin === true)
     );
-    const nonRootIncoming = incoming.users.filter(
-      (u) =>
-        u &&
-        u.id !== ROOT_ADMIN_ID &&
-        !u.isRootAdmin &&
-        typeof u.email === 'string' &&
-        Boolean(u.passwordHash) &&
-        Boolean(u.passwordSalt)
-    );
+    const nonRootIncoming = incoming.users
+      .filter(
+        (u) =>
+          u &&
+          u.id !== ROOT_ADMIN_ID &&
+          !u.isRootAdmin &&
+          typeof u.email === 'string' &&
+          Boolean(u.passwordHash) &&
+          Boolean(u.passwordSalt)
+      )
+      .map((u) => ({
+        ...u,
+        email: u.email.trim().toLowerCase(),
+        username: (u.username || u.email.split('@')[0] || 'user')
+          .trim()
+          .toLowerCase(),
+        fullName: (u.fullName || u.username || u.email.split('@')[0] || 'User').trim(),
+        companyName: typeof u.companyName === 'string' ? u.companyName : '',
+        role: u.role === 'admin' ? ('admin' as const) : ('user' as const),
+        isRootAdmin: false,
+        status:
+          u.status === 'suspended' ? ('suspended' as const) : ('active' as const),
+        lensCoins: Number.isFinite(Number(u.lensCoins))
+          ? Math.max(0, Math.round(Number(u.lensCoins)))
+          : 0,
+        totalCoinsUsed: Number.isFinite(Number(u.totalCoinsUsed))
+          ? Math.max(0, Math.round(Number(u.totalCoinsUsed)))
+          : 0,
+        totalSearches: Number.isFinite(Number(u.totalSearches))
+          ? Math.max(0, Math.round(Number(u.totalSearches)))
+          : 0,
+        plan: u.plan === 'unlimited' ? ('unlimited' as const) : ('starter' as const),
+        unlimitedExpiresAt:
+          typeof u.unlimitedExpiresAt === 'string' ? u.unlimitedExpiresAt : null,
+        unlockedCompanies: Array.isArray(u.unlockedCompanies)
+          ? u.unlockedCompanies.filter((d): d is string => typeof d === 'string')
+          : [],
+        createdAt: u.createdAt || new Date().toISOString(),
+        lastLoginAt: u.lastLoginAt || u.createdAt || new Date().toISOString(),
+      }));
 
     const restoredRoot: StoredUserRecord =
       incomingRoot &&
@@ -2528,6 +2604,11 @@ export function importFullVpsBackup(payload: unknown): RestoreVpsBackupSummary {
             status: 'active',
             plan: 'unlimited',
             unlimitedExpiresAt: 'lifetime',
+            unlockedCompanies: Array.isArray(incomingRoot.unlockedCompanies)
+              ? incomingRoot.unlockedCompanies.filter(
+                  (d): d is string => typeof d === 'string'
+                )
+              : [],
           }
         : currentRoot;
 
