@@ -22,10 +22,12 @@ import {
   slugToDomainCache,
   slugToWebsiteCache,
 } from '../cache.ts';
+import { resolveCountrySlugsFromFilters } from '../../src/utils/geographyAndRevenue.ts';
 import {
   getCompanyOfficersBySlugOrDomain,
   getConfirmedContactsForDomain,
   getVaultQuickRoster,
+  queryVaultRosterCapableCompanies,
   saveVaultQuickRoster,
 } from '../store/companyVaultDb.ts';
 import type {
@@ -52,7 +54,10 @@ import {
 } from '../utils/textAndDomain.ts';
 import { detectBatchCompanyEmailPatterns } from './emailIntelligence.ts';
 import {
+  buildIndustryTldHintsForSlugs,
+  buildIndustryTokensForSlugs,
   computeFilterFacetsAndTotals,
+  fetchGlobalIndustries,
   parseGlobalFilterParams,
   resolveFilteredGlobalCompanies,
 } from './globalDirectoryService.ts';
@@ -628,107 +633,162 @@ export async function buildFilterExplorerResponse(
     Boolean(c.slug && c.domain)
   );
 
-  // Prioritize already-cached rosters + confirmed-email companies + TheOrg companies for instant extraction
-  // Pull up to 60 companies so Full Names & Emails fills up to 500 contacts/page quickly
-  const sortedValid = [...allValidCompanies].sort((a, b) => {
-    const aCached = quickRosterCache.has(a.slug.toLowerCase()) ? 1 : 0;
-    const bCached = quickRosterCache.has(b.slug.toLowerCase()) ? 1 : 0;
-    if (aCached !== bCached) return bCached - aCached;
-    const aConf = (a.confirmedEmailCount || 0) > 0 ? 1 : 0;
-    const bConf = (b.confirmedEmailCount || 0) > 0 ? 1 : 0;
-    if (aConf !== bConf) return bConf - aConf;
-    const aTheOrg = a.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
-    const bTheOrg = b.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
-    if (aTheOrg !== bTheOrg) return bTheOrg - aTheOrg;
-    return (b.confirmedEmailCount || 0) - (a.confirmedEmailCount || 0);
-  });
-
-  const cachedSlice = sortedValid
-    .filter((c) => quickRosterCache.has(c.slug.toLowerCase()))
-    .slice(0, 50);
-  const uncachedSlice = sortedValid
-    .filter((c) => !quickRosterCache.has(c.slug.toLowerCase()))
-    .slice(0, Math.max(12, 36 - cachedSlice.length));
-  const prioritizedForRosters = [...cachedSlice, ...uncachedSlice].slice(0, 60);
-
-  const rawCompanyRosters = await Promise.race([
-    mapWithConcurrency(prioritizedForRosters, 20, (comp) =>
-      fetchQuickCompanyRoster(comp)
-    ),
-    new Promise<EmployeeRecord[][]>((resolve) =>
-      setTimeout(
-        () =>
-          resolve(
-            prioritizedForRosters.map(
-              (c) => quickRosterCache.get(c.slug.toLowerCase())?.data || []
-            )
-          ),
-        850
-      )
-    ),
-  ]);
-
-  const patternInputs = prioritizedForRosters
-    .map((comp, idx) => {
-      const roster = rawCompanyRosters[idx] || [];
-      const dom = (roster[0]?.domain || comp.domain || '').toLowerCase();
-      return {
-        domain: dom,
-        companyName: roster[0]?.companyName || comp.name,
-        employees: roster.slice(0, 60),
-        employeeRange: comp.employeeRange,
-      };
-    })
-    .filter((item) => Boolean(item.domain && isValidDomain(item.domain)));
-
-  // Apply cached patterns immediately (0ms) and warm uncached patterns non-blockingly in the background!
-  const batchPatterns = await detectBatchCompanyEmailPatterns(
-    patternInputs,
-    0
+  // Query SQLite specifically for roster-capable companies (TheOrg org charts, cached rosters, confirmed contacts, officers)
+  // offset by the requested page so Pagination 2, 3, 4... ALWAYS load real employees instead of Tranco-only domains!
+  const targetCountrySlugs = resolveCountrySlugsFromFilters(
+    companyParams.selectedContinents,
+    companyParams.selectedCountries
   );
+  const allInds =
+    companyParams.rawSlugs.length > 0 ? await fetchGlobalIndustries() : [];
+  const industryTokens =
+    companyParams.rawSlugs.length > 0
+      ? buildIndustryTokensForSlugs(companyParams.rawSlugs, allInds)
+      : undefined;
+  const industryTlds =
+    companyParams.rawSlugs.length > 0
+      ? buildIndustryTldHintsForSlugs(companyParams.rawSlugs)
+      : undefined;
 
-  const companyRosters = rawCompanyRosters.map((roster, idx) => {
-    const comp = prioritizedForRosters[idx];
-    const dom = (roster[0]?.domain || comp?.domain || '').toLowerCase();
-    const detected = dom ? batchPatterns.get(dom) : undefined;
-    return applyDetectedPatternToRoster(roster, detected, {
-      companyName: comp?.name || '',
-      domain: dom,
-      industry: comp?.industry || 'Information Technology & Business Services',
+  const TARGET_CONTACTS_PER_PAGE = 500;
+  const COMPANIES_BATCH_PER_PAGE = 90;
+
+  let rosterCapableFromVault = queryVaultRosterCapableCompanies({
+    companyQuery: companyParams.companyQuery,
+    countrySlugs:
+      targetCountrySlugs.length > 0 ? targetCountrySlugs : undefined,
+    locationQuery: companyParams.locationQuery,
+    industryTokens,
+    industryTlds,
+    industryKeyword: companyParams.industryKeyword,
+    employeeRanges:
+      companyParams.employeeRanges.length > 0
+        ? companyParams.employeeRanges
+        : undefined,
+    revenueRanges:
+      companyParams.revenueRanges.length > 0
+        ? companyParams.revenueRanges
+        : undefined,
+    requireRealDomain: true,
+    page: companyParams.page,
+    perPage: COMPANIES_BATCH_PER_PAGE,
+  });
+
+  // Top up from untagged global-TLD roster-capable companies (same industry/query) when strict country slice is small
+  if (
+    rosterCapableFromVault.length < COMPANIES_BATCH_PER_PAGE &&
+    targetCountrySlugs.length > 0 &&
+    !companyParams.locationQuery.trim()
+  ) {
+    const seen = new Set(rosterCapableFromVault.map((c) => c.slug));
+    const globalNullRosters = queryVaultRosterCapableCompanies({
+      companyQuery: companyParams.companyQuery,
+      nullCountryOnly: true,
+      industryTokens,
+      industryTlds,
+      industryKeyword: companyParams.industryKeyword,
+      employeeRanges:
+        companyParams.employeeRanges.length > 0
+          ? companyParams.employeeRanges
+          : undefined,
+      revenueRanges:
+        companyParams.revenueRanges.length > 0
+          ? companyParams.revenueRanges
+          : undefined,
+      requireRealDomain: true,
+      page: companyParams.page,
+      perPage: COMPANIES_BATCH_PER_PAGE,
     });
-  });
-
-  const updatedCompanies = directoryPayload.companies.map((comp) => {
-    const dom = (comp.domain || '').toLowerCase();
-    const pat =
-      (dom && batchPatterns.get(dom)) ||
-      (dom && emailPatternCache.get(dom)?.data) ||
-      undefined;
-    if (pat) {
-      return {
-        ...comp,
-        confirmedEmailCount:
-          pat.discoveredContacts.length > 0
-            ? pat.discoveredContacts.length
-            : comp.confirmedEmailCount,
-        detectedFormulaId: pat.analysis.detectedFormulaId,
-        detectedFormulaLabel: pat.analysis.formulaLabel,
-        patternConfidence: pat.analysis.patternConfidence,
-      };
+    for (const c of globalNullRosters) {
+      if (!seen.has(c.slug)) {
+        seen.add(c.slug);
+        rosterCapableFromVault.push(c);
+        if (rosterCapableFromVault.length >= COMPANIES_BATCH_PER_PAGE) break;
+      }
     }
-    return comp;
-  });
-
-  const nonEmptyRostersCount = companyRosters.filter(
-    (r) => r.length > 0
-  ).length;
-
-  if (allValidCompanies.length > 24) {
-    void mapWithConcurrency(allValidCompanies.slice(24, 54), 6, (comp) =>
-      fetchQuickCompanyRoster(comp)
-    );
   }
 
+  // If a narrow employee/revenue bracket ran out of strict roster-bearing companies,
+  // relax ONLY employee/revenue brackets while strictly preserving Country, Industry, and Search Query
+  if (
+    rosterCapableFromVault.length < COMPANIES_BATCH_PER_PAGE &&
+    !companyParams.companyQuery &&
+    (companyParams.employeeRanges.length > 0 ||
+      companyParams.revenueRanges.length > 0)
+  ) {
+    const relaxedRosterVault = queryVaultRosterCapableCompanies({
+      countrySlugs:
+        targetCountrySlugs.length > 0 ? targetCountrySlugs : undefined,
+      locationQuery: companyParams.locationQuery,
+      industryTokens,
+      industryTlds,
+      industryKeyword: companyParams.industryKeyword,
+      requireRealDomain: true,
+      page: companyParams.page,
+      perPage: COMPANIES_BATCH_PER_PAGE,
+    });
+    const seen = new Set(rosterCapableFromVault.map((c) => c.slug));
+    for (const c of relaxedRosterVault) {
+      if (!seen.has(c.slug)) {
+        seen.add(c.slug);
+        rosterCapableFromVault.push(c);
+        if (rosterCapableFromVault.length >= COMPANIES_BATCH_PER_PAGE) break;
+      }
+    }
+  }
+
+  // If industry + country STILL has fewer than COMPANIES_BATCH_PER_PAGE roster-capable orgs, include exact-industry worldwide orgs
+  if (
+    rosterCapableFromVault.length < COMPANIES_BATCH_PER_PAGE &&
+    !companyParams.companyQuery &&
+    !companyParams.locationQuery.trim() &&
+    companyParams.rawSlugs.length > 0 &&
+    targetCountrySlugs.length > 0
+  ) {
+    const seen = new Set(rosterCapableFromVault.map((c) => c.slug));
+    const worldwideSameIndustry = queryVaultRosterCapableCompanies({
+      excludeCountrySlugs: targetCountrySlugs,
+      industryTokens,
+      industryTlds,
+      industryKeyword: companyParams.industryKeyword,
+      requireRealDomain: true,
+      page: companyParams.page,
+      perPage: COMPANIES_BATCH_PER_PAGE,
+    });
+    for (const c of worldwideSameIndustry) {
+      if (!seen.has(c.slug)) {
+        seen.add(c.slug);
+        rosterCapableFromVault.push(c);
+        if (rosterCapableFromVault.length >= COMPANIES_BATCH_PER_PAGE) break;
+      }
+    }
+  }
+
+  // Keep each page strictly disjoint: use this page's roster-capable slice first,
+  // and supplement from directoryPayload only when fewer roster-capable companies matched.
+  const mergedRosterPool: GlobalCompanyItem[] = [];
+  const seenRosterKeys = new Set<string>();
+  const addUniqueCompany = (c: GlobalCompanyItem) => {
+    if (!c.slug || !c.domain) return;
+    const slugKey = `s:${c.slug.toLowerCase()}`;
+    const domKey = `d:${c.domain.toLowerCase()}`;
+    if (seenRosterKeys.has(slugKey) || seenRosterKeys.has(domKey)) return;
+    seenRosterKeys.add(slugKey);
+    seenRosterKeys.add(domKey);
+    mergedRosterPool.push(c);
+  };
+
+  for (const c of rosterCapableFromVault) {
+    addUniqueCompany(c);
+  }
+  if (mergedRosterPool.length < COMPANIES_BATCH_PER_PAGE) {
+    for (const c of allValidCompanies) {
+      addUniqueCompany(c);
+      if (mergedRosterPool.length >= COMPANIES_BATCH_PER_PAGE) break;
+    }
+  }
+
+  // Helper to resolve rosters + apply detected patterns + filter contacts from a company batch
   const rangeCeilingMap: Record<string, number> = {
     '1 - 50': 45,
     '51 - 200': 195,
@@ -747,70 +807,248 @@ export async function buildFilterExplorerResponse(
         )
       : 25000;
 
-  const seenMatchedPersonDomain = new Set<string>();
-  const mergedEmployees: EmployeeRecord[] = [];
-
   const overrideDef =
     formulaOverride !== 'auto'
       ? getExcelFormulaDefinition(formulaOverride)
       : null;
 
-  for (const fullRoster of companyRosters) {
-    const roster =
-      fullRoster.length > maxAllowedPerCompany
-        ? fullRoster.slice(0, maxAllowedPerCompany)
-        : fullRoster;
-    for (const emp of roster) {
-      const uniqueKey = `${emp.domain}:${emp.id || emp.fullName.toLowerCase()}`;
+  const seenMatchedPersonDomain = new Set<string>();
+  const mergedEmployees: EmployeeRecord[] = [];
+  const allBatchPatterns = new Map<
+    string,
+    Awaited<ReturnType<typeof detectBatchCompanyEmailPatterns>> extends Map<
+      string,
+      infer V
+    >
+      ? V
+      : never
+  >();
+  let nonEmptyRostersCount = 0;
 
-      const resolvedEmail =
-        formulaOverride === 'auto' || emp.emailVerifiedOnWeb
-          ? emp.email
-          : applyExcelEmailFormula(emp.fullName, emp.domain, formulaOverride);
-      const resolvedAccuracy =
-        formulaOverride === 'auto' || emp.emailVerifiedOnWeb
-          ? emp.emailAccuracy
-          : Math.max(62, emp.emailAccuracy - 6);
+  const extractContactsFromBatch = async (
+    batch: GlobalCompanyItem[],
+    timeoutMs: number
+  ): Promise<void> => {
+    if (batch.length === 0) return;
 
-      if (resolvedAccuracy < minAccuracy || resolvedAccuracy > maxAccuracy) {
-        continue;
-      }
-      if (seniorities.length > 0 && !seniorities.includes(emp.seniority)) {
-        continue;
-      }
-      if (departments.length > 0 && !departments.includes(emp.department)) {
-        continue;
-      }
-      if (roleKeyword && !emp.jobTitle.toLowerCase().includes(roleKeyword)) {
-        continue;
-      }
-      if (
-        contactSearch &&
-        !emp.fullName.toLowerCase().includes(contactSearch) &&
-        !resolvedEmail.toLowerCase().includes(contactSearch) &&
-        !(emp.companyName || '').toLowerCase().includes(contactSearch)
-      ) {
-        continue;
-      }
+    const collectedRosters: EmployeeRecord[][] = batch.map(
+      (c) => quickRosterCache.get(c.slug.toLowerCase())?.data || []
+    );
 
-      if (seenMatchedPersonDomain.has(uniqueKey)) continue;
-      seenMatchedPersonDomain.add(uniqueKey);
+    await Promise.race([
+      mapWithConcurrency(
+        batch.map((comp, idx) => ({ comp, idx })),
+        20,
+        async ({ comp, idx }) => {
+          const roster = await fetchQuickCompanyRoster(comp);
+          if (roster.length > 0) {
+            collectedRosters[idx] = roster;
+          }
+        }
+      ),
+      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
 
-      mergedEmployees.push({
-        ...emp,
-        email: resolvedEmail,
-        emailAccuracy: resolvedAccuracy,
-        emailFormulaId:
-          formulaOverride === 'auto' || emp.emailVerifiedOnWeb
-            ? emp.emailFormulaId
-            : formulaOverride,
-        emailFormulaLabel:
-          formulaOverride === 'auto' || emp.emailVerifiedOnWeb
-            ? emp.emailFormulaLabel
-            : overrideDef?.label,
+    const patternInputs = batch
+      .map((comp, idx) => {
+        const roster = collectedRosters[idx] || [];
+        const dom = (roster[0]?.domain || comp.domain || '').toLowerCase();
+        return {
+          domain: dom,
+          companyName: roster[0]?.companyName || comp.name,
+          employees: roster.slice(0, 60),
+          employeeRange: comp.employeeRange,
+        };
+      })
+      .filter((item) => Boolean(item.domain && isValidDomain(item.domain)));
+
+    // Apply cached patterns immediately (0ms) and warm uncached patterns non-blockingly!
+    const batchPatterns = await detectBatchCompanyEmailPatterns(
+      patternInputs,
+      0
+    );
+    for (const [k, v] of batchPatterns.entries()) {
+      allBatchPatterns.set(k, v);
+    }
+
+    for (let idx = 0; idx < batch.length; idx++) {
+      const comp = batch[idx];
+      const rawRoster = collectedRosters[idx] || [];
+      if (rawRoster.length === 0) continue;
+      nonEmptyRostersCount++;
+
+      const dom = (rawRoster[0]?.domain || comp?.domain || '').toLowerCase();
+      const detected = dom ? batchPatterns.get(dom) : undefined;
+      const fullRoster = applyDetectedPatternToRoster(rawRoster, detected, {
+        companyName: comp?.name || '',
+        domain: dom,
+        industry: comp?.industry || 'Information Technology & Business Services',
       });
+
+      const roster =
+        fullRoster.length > maxAllowedPerCompany
+          ? fullRoster.slice(0, maxAllowedPerCompany)
+          : fullRoster;
+
+      for (const emp of roster) {
+        const uniqueKey = `${emp.domain}:${emp.id || emp.fullName.toLowerCase()}`;
+
+        const resolvedEmail =
+          formulaOverride === 'auto' || emp.emailVerifiedOnWeb
+            ? emp.email
+            : applyExcelEmailFormula(emp.fullName, emp.domain, formulaOverride);
+        const resolvedAccuracy =
+          formulaOverride === 'auto' || emp.emailVerifiedOnWeb
+            ? emp.emailAccuracy
+            : Math.max(62, emp.emailAccuracy - 6);
+
+        if (resolvedAccuracy < minAccuracy || resolvedAccuracy > maxAccuracy) {
+          continue;
+        }
+        if (seniorities.length > 0 && !seniorities.includes(emp.seniority)) {
+          continue;
+        }
+        if (departments.length > 0 && !departments.includes(emp.department)) {
+          continue;
+        }
+        if (roleKeyword && !emp.jobTitle.toLowerCase().includes(roleKeyword)) {
+          continue;
+        }
+        if (
+          contactSearch &&
+          !emp.fullName.toLowerCase().includes(contactSearch) &&
+          !resolvedEmail.toLowerCase().includes(contactSearch) &&
+          !(emp.companyName || '').toLowerCase().includes(contactSearch)
+        ) {
+          continue;
+        }
+
+        if (seenMatchedPersonDomain.has(uniqueKey)) continue;
+        seenMatchedPersonDomain.add(uniqueKey);
+
+        mergedEmployees.push({
+          ...emp,
+          email: resolvedEmail,
+          emailAccuracy: resolvedAccuracy,
+          emailFormulaId:
+            formulaOverride === 'auto' || emp.emailVerifiedOnWeb
+              ? emp.emailFormulaId
+              : formulaOverride,
+          emailFormulaLabel:
+            formulaOverride === 'auto' || emp.emailVerifiedOnWeb
+              ? emp.emailFormulaLabel
+              : overrideDef?.label,
+        });
+      }
+    }
+  };
+
+  // Prioritize already-cached rosters + TheOrg + confirmed-email companies within THIS page's disjoint slice
+  const sortedValid = [...mergedRosterPool].sort((a, b) => {
+    const aCached = quickRosterCache.has(a.slug.toLowerCase()) ? 1 : 0;
+    const bCached = quickRosterCache.has(b.slug.toLowerCase()) ? 1 : 0;
+    if (aCached !== bCached) return bCached - aCached;
+    const aTheOrg = a.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
+    const bTheOrg = b.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
+    if (aTheOrg !== bTheOrg) return bTheOrg - aTheOrg;
+    const aConf = (a.confirmedEmailCount || 0) > 0 ? 1 : 0;
+    const bConf = (b.confirmedEmailCount || 0) > 0 ? 1 : 0;
+    if (aConf !== bConf) return bConf - aConf;
+    return (b.confirmedEmailCount || 0) - (a.confirmedEmailCount || 0);
+  });
+
+  // Pass 1: Primary 60 companies from this page's slice (instant if cached, 1.9s ceiling for uncached)
+  const primaryBatch = sortedValid.slice(0, 60);
+  await extractContactsFromBatch(primaryBatch, 1900);
+
+  // Pass 2: If fewer than 500 contacts resolved, immediately consume remaining companies in this page's slice
+  if (mergedEmployees.length < TARGET_CONTACTS_PER_PAGE && sortedValid.length > 60) {
+    await extractContactsFromBatch(sortedValid.slice(60, 90), 1400);
+  }
+
+  // Pass 3: If STILL under 500 contacts (e.g. narrow industry/headcount filter with sparse rosters),
+  // top up cleanly from the next SQLite roster-capable offset within the exact same filter scope until 500 or end of list!
+  if (mergedEmployees.length < TARGET_CONTACTS_PER_PAGE) {
+    const baseOffset = companyParams.page * COMPANIES_BATCH_PER_PAGE;
+    const extraVaultBatch = queryVaultRosterCapableCompanies({
+      companyQuery: companyParams.companyQuery,
+      countrySlugs:
+        targetCountrySlugs.length > 0 ? targetCountrySlugs : undefined,
+      locationQuery: companyParams.locationQuery,
+      industryTokens,
+      industryTlds,
+      industryKeyword: companyParams.industryKeyword,
+      requireRealDomain: true,
+      page: companyParams.page + 1,
+      perPage: 60,
+      offsetOverride: baseOffset,
+    }).filter((c) => {
+      const sKey = `s:${c.slug.toLowerCase()}`;
+      const dKey = `d:${(c.domain || '').toLowerCase()}`;
+      if (seenRosterKeys.has(sKey) || seenRosterKeys.has(dKey)) return false;
+      seenRosterKeys.add(sKey);
+      seenRosterKeys.add(dKey);
+      return true;
+    });
+
+    if (extraVaultBatch.length > 0) {
+      await extractContactsFromBatch(extraVaultBatch.slice(0, 45), 1400);
     }
   }
+
+  const updatedCompanies = directoryPayload.companies.map((comp) => {
+    const dom = (comp.domain || '').toLowerCase();
+    const pat =
+      (dom && allBatchPatterns.get(dom)) ||
+      (dom && emailPatternCache.get(dom)?.data) ||
+      undefined;
+    if (pat) {
+      return {
+        ...comp,
+        confirmedEmailCount:
+          pat.discoveredContacts.length > 0
+            ? pat.discoveredContacts.length
+            : comp.confirmedEmailCount,
+        detectedFormulaId: pat.analysis.detectedFormulaId,
+        detectedFormulaLabel: pat.analysis.formulaLabel,
+        patternConfidence: pat.analysis.patternConfidence,
+      };
+    }
+    return comp;
+  });
+
+  // Warm the NEXT page's first 24 roster-capable companies silently in the background so Page N+1 loads instantly!
+  void (async () => {
+    try {
+      const nextSlice = queryVaultRosterCapableCompanies({
+        companyQuery: companyParams.companyQuery,
+        countrySlugs:
+          targetCountrySlugs.length > 0 ? targetCountrySlugs : undefined,
+        locationQuery: companyParams.locationQuery,
+        industryTokens,
+        industryTlds,
+        industryKeyword: companyParams.industryKeyword,
+        employeeRanges:
+          companyParams.employeeRanges.length > 0
+            ? companyParams.employeeRanges
+            : undefined,
+        revenueRanges:
+          companyParams.revenueRanges.length > 0
+            ? companyParams.revenueRanges
+            : undefined,
+        requireRealDomain: true,
+        page: companyParams.page + 1,
+        perPage: 30,
+      }).filter((c) => !quickRosterCache.has(c.slug.toLowerCase()));
+      if (nextSlice.length > 0) {
+        await mapWithConcurrency(nextSlice.slice(0, 20), 6, (comp) =>
+          fetchQuickCompanyRoster(comp)
+        );
+      }
+    } catch {
+      // Non-fatal background pre-warm
+    }
+  })();
 
   mergedEmployees.sort((a, b) => {
     if (a.importanceScore !== b.importanceScore) {
@@ -822,10 +1060,13 @@ export async function buildFilterExplorerResponse(
     return a.fullName.localeCompare(b.fullName);
   });
 
-  const rankedEmployees = mergedEmployees.map((emp, idx) => ({
-    ...emp,
-    rank: idx + 1,
-  }));
+  // Enforce 500 results per page cleanly until the true end of the list
+  const rankedEmployees = mergedEmployees
+    .slice(0, TARGET_CONTACTS_PER_PAGE)
+    .map((emp, idx) => ({
+      ...emp,
+      rank: (directoryPayload.page - 1) * TARGET_CONTACTS_PER_PAGE + idx + 1,
+    }));
 
   const confirmedEmailsCount = rankedEmployees.filter(
     (e) => e.emailVerifiedOnWeb
@@ -847,17 +1088,23 @@ export async function buildFilterExplorerResponse(
   let totalMatchedContacts = facets.totalMatchedContacts;
   if (totalOrgs === 0 || (hasContactFilter && rankedEmployees.length === 0)) {
     totalMatchedContacts = 0;
-  } else if (
-    totalOrgs <= prioritizedForRosters.length &&
-    allValidCompanies.length <= prioritizedForRosters.length
-  ) {
-    totalMatchedContacts = rankedEmployees.length;
+  } else if (rankedEmployees.length < TARGET_CONTACTS_PER_PAGE) {
+    // Reached the true end of matching indexed contacts
+    totalMatchedContacts =
+      (directoryPayload.page - 1) * TARGET_CONTACTS_PER_PAGE +
+      rankedEmployees.length;
   } else {
     totalMatchedContacts = Math.max(
-      rankedEmployees.length,
+      directoryPayload.page * TARGET_CONTACTS_PER_PAGE,
       facets.totalMatchedContacts
     );
   }
+
+  // Cap explorer totalPages cleanly when we genuinely hit the end of matching contacts (< 500 on this page)
+  const effectiveExplorerTotalPages =
+    rankedEmployees.length < TARGET_CONTACTS_PER_PAGE
+      ? Math.max(1, directoryPayload.page)
+      : directoryPayload.totalPages;
 
   const responsePayload: FilterExplorerResponse = {
     scopeTitle: directoryPayload.industryFullTitle,
@@ -868,7 +1115,7 @@ export async function buildFilterExplorerResponse(
     vaultCompaniesCount: facets.vaultCompaniesCount,
     liveFederatedCatalogTotal: facets.liveFederatedCatalogTotal,
     page: directoryPayload.page,
-    totalPages: directoryPayload.totalPages,
+    totalPages: effectiveExplorerTotalPages,
     companies: updatedCompanies,
     employees: rankedEmployees,
     departmentBreakdown,
@@ -876,14 +1123,17 @@ export async function buildFilterExplorerResponse(
     fetchedAt: new Date().toISOString(),
   };
 
-  if (filterExplorerRamCache.size > 250) {
-    const oldestKey = filterExplorerRamCache.keys().next().value;
-    if (oldestKey) filterExplorerRamCache.delete(oldestKey);
+  // Never cache empty employee pages when organizations exist (prevents stuck empty Page 2!)
+  if (rankedEmployees.length > 0 || totalOrgs === 0) {
+    if (filterExplorerRamCache.size > 250) {
+      const oldestKey = filterExplorerRamCache.keys().next().value;
+      if (oldestKey) filterExplorerRamCache.delete(oldestKey);
+    }
+    filterExplorerRamCache.set(fullCacheKey, {
+      data: responsePayload,
+      expiresAt: Date.now() + 90_000,
+    });
   }
-  filterExplorerRamCache.set(fullCacheKey, {
-    data: responsePayload,
-    expiresAt: Date.now() + 90_000,
-  });
 
   return responsePayload;
 }

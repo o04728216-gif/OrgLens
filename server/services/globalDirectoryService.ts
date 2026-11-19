@@ -28,6 +28,7 @@ import {
   slugToWebsiteCache,
 } from '../cache.ts';
 import {
+  countVaultCompaniesFast,
   deriveIndustriesFromVault,
   getConfirmedContactsForDomains,
   getVaultGroupBreakdowns,
@@ -51,6 +52,7 @@ import {
 import {
   COMPANIES_PER_PAGE,
   INDUSTRY_SYNONYM_MAP,
+  INDUSTRY_TLD_HINTS,
   WORLDWIDE_COUNTRY_HUBS,
 } from './directoryConfig.ts';
 import {
@@ -316,29 +318,76 @@ function allocateExactIntegers(
   return out;
 }
 
-function buildIndustryTokensForSlugs(
+export function buildIndustryTokensForSlugs(
   slugs: string[],
   allInds: GlobalIndustryOption[]
 ): string[] {
   const tokens = new Set<string>();
-  for (const s of slugs) {
+  const stopWords = new Set([
+    'and',
+    'the',
+    'for',
+    'services',
+    'service',
+    'management',
+    'organization',
+    'organizations',
+    'industry',
+    'industries',
+    'other',
+    'general',
+  ]);
+  for (const rawSlug of slugs) {
+    const s = rawSlug.trim().toLowerCase();
+    const compact = s.replace(/-/g, '');
+
+    // 1. Direct or normalized synonym map hit
+    const directSyns =
+      INDUSTRY_SYNONYM_MAP[s] || INDUSTRY_SYNONYM_MAP[compact];
+    if (directSyns) {
+      for (const syn of directSyns) tokens.add(syn.toLowerCase());
+    } else {
+      // Check if any key in INDUSTRY_SYNONYM_MAP is a strong part of this slug (e.g. 'computer-software-saas' -> 'software')
+      for (const [key, syns] of Object.entries(INDUSTRY_SYNONYM_MAP)) {
+        if (key.length >= 4 && (s.includes(key) || key.includes(s))) {
+          for (const syn of syns.slice(0, 4)) tokens.add(syn.toLowerCase());
+          break;
+        }
+      }
+    }
+
+    // 2. Words from the canonical industry title itself
     const found = allInds.find((g) => g.slug === s);
     const label = found
       ? `${found.rawTitle} ${found.fullTitle}`
       : humanizeSlug(s);
     for (const word of label.toLowerCase().split(/[^a-z0-9]+/)) {
-      if (
-        word.length >= 3 &&
-        !['and', 'the', 'for', 'services'].includes(word)
-      ) {
+      if (word.length >= 3 && !stopWords.has(word)) {
         tokens.add(word);
       }
     }
-    for (const syn of INDUSTRY_SYNONYM_MAP[s] || []) {
-      tokens.add(syn.toLowerCase());
+  }
+  return Array.from(tokens).slice(0, 8);
+}
+
+export function buildIndustryTldHintsForSlugs(slugs: string[]): string[] {
+  const tlds = new Set<string>();
+  for (const rawSlug of slugs) {
+    const s = rawSlug.trim().toLowerCase();
+    const compact = s.replace(/-/g, '');
+    const direct = INDUSTRY_TLD_HINTS[s] || INDUSTRY_TLD_HINTS[compact];
+    if (direct) {
+      for (const t of direct) tlds.add(t);
+    } else {
+      for (const [key, list] of Object.entries(INDUSTRY_TLD_HINTS)) {
+        if (key.length >= 5 && s.includes(key)) {
+          for (const t of list) tlds.add(t);
+          break;
+        }
+      }
     }
   }
-  return Array.from(tokens);
+  return Array.from(tlds).slice(0, 3);
 }
 
 /**
@@ -523,7 +572,7 @@ export async function computeFilterFacetsAndTotals(
         ? buildIndustryTokensForSlugs(p.rawSlugs, industries)
         : undefined;
 
-    const exactVault = queryVaultCompanies({
+    totalMatchedCompanies = countVaultCompaniesFast({
       companyQuery: p.companyQuery,
       countrySlugs:
         targetCountrySlugs.length > 0 ? targetCountrySlugs : undefined,
@@ -533,11 +582,7 @@ export async function computeFilterFacetsAndTotals(
       employeeRanges: p.employeeRanges.length > 0 ? p.employeeRanges : undefined,
       revenueRanges: p.revenueRanges.length > 0 ? p.revenueRanges : undefined,
       requireRealDomain: true,
-      page: 1,
-      perPage: 1,
     });
-
-    totalMatchedCompanies = exactVault.totalMatchingInVault;
     baseScopeWithoutGeo =
       geoFraction > 0
         ? Math.max(
@@ -1273,28 +1318,34 @@ function attachLocalPatternAndConfirmedMetadata(
     enriched.map((c) => c.domain || '').filter(Boolean)
   );
 
-  return enriched.map((comp) => {
+  const seenDomains = new Set<string>();
+  const deduped: GlobalCompanyItem[] = [];
+  for (const comp of enriched) {
     const dom = (comp.domain || '').toLowerCase();
-    const confirmedList = dom ? confirmedByDomain.get(dom) : undefined;
+    if (!dom || seenDomains.has(dom)) continue;
+    seenDomains.add(dom);
+    const confirmedList = confirmedByDomain.get(dom);
     const confirmedCount =
       confirmedList && confirmedList.length > 0
         ? confirmedList.length
         : comp.confirmedEmailCount;
-    const cachedPat = dom ? emailPatternCache.get(dom) : undefined;
+    const cachedPat = emailPatternCache.get(dom);
     if (cachedPat && cachedPat.expiresAt > Date.now()) {
-      return {
+      deduped.push({
         ...comp,
         confirmedEmailCount: confirmedCount,
         detectedFormulaId: cachedPat.data.analysis.detectedFormulaId,
         detectedFormulaLabel: cachedPat.data.analysis.formulaLabel,
         patternConfidence: cachedPat.data.analysis.patternConfidence,
-      };
+      });
+    } else {
+      deduped.push({
+        ...comp,
+        confirmedEmailCount: confirmedCount,
+      });
     }
-    return {
-      ...comp,
-      confirmedEmailCount: confirmedCount,
-    };
-  });
+  }
+  return deduped;
 }
 
 function scoreCompanyRelevanceServer(
@@ -1421,11 +1472,44 @@ function refreshUpstreamDirectoryInBackground(
     } catch {
       // Non-fatal background refresh
     } finally {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         backgroundDirectoryRefreshes.delete(cacheKey);
       }, 60_000);
+      if (typeof timer.unref === 'function') timer.unref();
     }
   })();
+}
+
+function withSoftTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const t = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(fallback);
+      }
+    }, ms);
+    if (typeof t.unref === 'function') t.unref();
+    promise
+      .then((val) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(t);
+          resolve(val);
+        }
+      })
+      .catch(() => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(t);
+          resolve(fallback);
+        }
+      });
+  });
 }
 
 export async function resolveFilteredGlobalCompanies(
@@ -1465,6 +1549,8 @@ export async function resolveFilteredGlobalCompanies(
     p.rawSlugs.length > 0
       ? buildIndustryTokensForSlugs(p.rawSlugs, allInds)
       : [];
+  const industryTldHints =
+    p.rawSlugs.length > 0 ? buildIndustryTldHintsForSlugs(p.rawSlugs) : [];
 
   let slugIdentifier = 'worldwide';
   if (p.rawSlugs.length > 0) {
@@ -1473,7 +1559,11 @@ export async function resolveFilteredGlobalCompanies(
     slugIdentifier = targetCountrySlugs.join(',');
   }
 
-  // 1. Instant Local SQLite Worldwide Vault Query (< 8ms, real verified domains ONLY!)
+  const hasFreeText = Boolean(
+    p.companyQuery.trim() || p.locationQuery.trim() || p.industryKeyword.trim()
+  );
+
+  // 1. TIER 1: Exact SQLite Worldwide Vault Query (exact country + expanded industry synonyms & TLD hints)
   const vaultResult = queryVaultCompanies({
     companyQuery: p.companyQuery,
     countrySlugs:
@@ -1481,36 +1571,86 @@ export async function resolveFilteredGlobalCompanies(
     locationQuery: p.locationQuery,
     industryTokens:
       industryKeywordTokens.length > 0 ? industryKeywordTokens : undefined,
+    industryTlds: industryTldHints.length > 0 ? industryTldHints : undefined,
     industryKeyword: p.industryKeyword,
     employeeRanges: p.employeeRanges.length > 0 ? p.employeeRanges : undefined,
     revenueRanges: p.revenueRanges.length > 0 ? p.revenueRanges : undefined,
     requireRealDomain: true,
     page: p.page,
     perPage: COMPANIES_PER_PAGE,
+    extraBuffer: 60,
   });
 
-  const isUnfilteredWorldwide =
-    !p.companyQuery &&
-    !p.industryKeyword &&
-    !p.locationQuery &&
-    p.rawSlugs.length === 0 &&
-    targetCountrySlugs.length === 0 &&
-    p.employeeRanges.length === 0 &&
-    p.revenueRanges.length === 0;
+  // Dedupe helper preserving order across tiers
+  const tieredVaultPool: GlobalCompanyItem[] = [];
+  const seenTierSlugs = new Set<string>();
+  const seenTierDomains = new Set<string>();
+  const pushUniqueToTierPool = (items: GlobalCompanyItem[], limit = COMPANIES_PER_PAGE + 80) => {
+    for (const c of items) {
+      const dom = (c.domain || '').toLowerCase();
+      if (seenTierSlugs.has(c.slug) || (dom && seenTierDomains.has(dom))) continue;
+      seenTierSlugs.add(c.slug);
+      if (dom) seenTierDomains.add(dom);
+      tieredVaultPool.push(c);
+      if (tieredVaultPool.length >= limit) break;
+    }
+  };
+  pushUniqueToTierPool(vaultResult.companies);
 
-  // 2. INSTANT LOCAL-FIRST FAST PATH (< 25ms response!)
+  const pageGlobalStart = (p.page - 1) * COMPANIES_PER_PAGE;
+
+  // 2. TIER 2: Deterministic Global-TLD Continuation (614k untagged .com/.org/.edu/.gov/.io domains in SQLite!)
+  // When a country filter is selected and exact country-tagged rows have fewer than 500 on this page,
+  // seamlessly continue into the untagged global-TLD pool with the EXACT same industry/employee/revenue/query filters
+  // at a strictly disjoint offset so Page 1, 2, 3... NEVER repeat domains and ALWAYS fill 500/page!
+  let tier1TotalCount = vaultResult.totalMatchingInVault;
+  let tier2TotalCount = 0;
+
   if (
-    vaultResult.companies.length >= 15 ||
-    (isUnfilteredWorldwide && vaultResult.companies.length >= 10)
+    tieredVaultPool.length < COMPANIES_PER_PAGE + 20 &&
+    targetCountrySlugs.length > 0 &&
+    !p.locationQuery.trim()
   ) {
-    const pageCompanies = attachLocalPatternAndConfirmedMetadata(
-      vaultResult.companies.slice(0, COMPANIES_PER_PAGE)
-    );
+    tier1TotalCount = countVaultCompaniesFast({
+      companyQuery: p.companyQuery,
+      countrySlugs: targetCountrySlugs,
+      industryTokens:
+        industryKeywordTokens.length > 0 ? industryKeywordTokens : undefined,
+      industryTlds: industryTldHints.length > 0 ? industryTldHints : undefined,
+      industryKeyword: p.industryKeyword,
+      employeeRanges: p.employeeRanges.length > 0 ? p.employeeRanges : undefined,
+      revenueRanges: p.revenueRanges.length > 0 ? p.revenueRanges : undefined,
+      requireRealDomain: true,
+    });
+    const tier2Offset = Math.max(0, pageGlobalStart - tier1TotalCount);
+    const tier2Need = Math.max(1, COMPANIES_PER_PAGE - tieredVaultPool.length);
+    const tier2Res = queryVaultCompanies({
+      companyQuery: p.companyQuery,
+      nullCountryOnly: true,
+      industryTokens:
+        industryKeywordTokens.length > 0 ? industryKeywordTokens : undefined,
+      industryTlds: industryTldHints.length > 0 ? industryTldHints : undefined,
+      industryKeyword: p.industryKeyword,
+      employeeRanges: p.employeeRanges.length > 0 ? p.employeeRanges : undefined,
+      revenueRanges: p.revenueRanges.length > 0 ? p.revenueRanges : undefined,
+      requireRealDomain: true,
+      page: p.page,
+      perPage: tier2Need,
+      extraBuffer: 60,
+      offsetOverride: tier2Offset,
+    });
+    tier2TotalCount = tier2Res.totalMatchingInVault;
+    pushUniqueToTierPool(tier2Res.companies);
+  }
+
+  // 3. INSTANT LOCAL-FIRST FAST PATH (< 80ms response whenever SQLite Tier 1 + Tier 2 delivers a full 500-company page!)
+  const fastEnriched = attachLocalPatternAndConfirmedMetadata(tieredVaultPool);
+  if (fastEnriched.length >= COMPANIES_PER_PAGE) {
+    const pageCompanies = fastEnriched.slice(0, COMPANIES_PER_PAGE);
 
     const totalCompanies = Math.max(
-      pageCompanies.length > 0
-        ? (p.page - 1) * COMPANIES_PER_PAGE + pageCompanies.length
-        : 0,
+      (p.page - 1) * COMPANIES_PER_PAGE + pageCompanies.length,
+      tier1TotalCount + tier2TotalCount,
       facets.totalMatchedCompanies
     );
 
@@ -1540,85 +1680,105 @@ export async function resolveFilteredGlobalCompanies(
       expiresAt: Date.now() + 300_000,
     });
 
-    if (vaultResult.companies.length < COMPANIES_PER_PAGE) {
-      refreshUpstreamDirectoryInBackground(cacheKey, p, targetCountrySlugs);
-    }
+    // Silently pre-warm the NEXT upstream batch in background so Page N+1 stays rich
+    refreshUpstreamDirectoryInBackground(cacheKey, p, targetCountrySlugs);
 
     return fastPayload;
   }
 
-  // 3. Multi-Page Parallel Upstream Fetch + Real Domain Resolution (< 2.1s ceiling)
+  // 4. TIER 3: Non-Throwing Parallel Upstream Fetch + Real Domain Resolution (targets full 500/page)
   const supplementalQueries: string[] = [];
-  if (p.companyQuery && p.page === 1) supplementalQueries.push(p.companyQuery);
-  if (p.industryKeyword && p.page === 1) {
-    supplementalQueries.push(p.industryKeyword);
-  }
+  if (p.companyQuery) supplementalQueries.push(p.companyQuery);
+  if (p.industryKeyword) supplementalQueries.push(p.industryKeyword);
 
-  const baseUpstreamPage = (p.page - 1) * 4 + 1;
-  const multiPageOffsets = [0, 1, 2, 3];
+  // TheOrg returns 50 companies per explore page -> 10 parallel pages = up to 500 real companies per directory page
+  const baseUpstreamPage = (p.page - 1) * 10 + 1;
+  const multiPageOffsets = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
   const exploreTasks: Array<Promise<GlobalCompaniesResponse>> = [];
   if (p.rawSlugs.length > 0) {
     for (const s of p.rawSlugs.slice(0, 2)) {
       for (const off of multiPageOffsets) {
         exploreTasks.push(
-          fetchGlobalCompaniesByIndustry(s, baseUpstreamPage + off)
+          withSoftTimeout(
+            fetchGlobalCompaniesByIndustry(s, baseUpstreamPage + off),
+            2400,
+            {
+              industrySlug: s,
+              industryFullTitle: humanizeSlug(s),
+              page: baseUpstreamPage + off,
+              perPage: 50,
+              totalCompanies: 0,
+              totalPages: 1,
+              companies: [],
+            }
+          )
         );
       }
     }
   } else if (targetCountrySlugs.length > 0) {
     for (const c of targetCountrySlugs.slice(0, 3)) {
-      for (const off of multiPageOffsets) {
+      for (const off of multiPageOffsets.slice(0, 6)) {
         exploreTasks.push(
-          fetchGlobalCompaniesByCountry(c, baseUpstreamPage + off)
+          withSoftTimeout(
+            fetchGlobalCompaniesByCountry(c, baseUpstreamPage + off),
+            2400,
+            {
+              industrySlug: c,
+              industryFullTitle: humanizeSlug(c),
+              page: baseUpstreamPage + off,
+              perPage: 50,
+              totalCompanies: 0,
+              totalPages: 1,
+              companies: [],
+            }
+          )
         );
       }
     }
   } else {
-    for (const hub of WORLDWIDE_COUNTRY_HUBS.slice(0, 6)) {
-      exploreTasks.push(fetchGlobalCompaniesByCountry(hub, p.page));
+    for (const hub of WORLDWIDE_COUNTRY_HUBS.slice(0, 10)) {
+      exploreTasks.push(
+        withSoftTimeout(fetchGlobalCompaniesByCountry(hub, p.page), 2400, {
+          industrySlug: hub,
+          industryFullTitle: humanizeSlug(hub),
+          page: p.page,
+          perPage: 50,
+          totalCompanies: 0,
+          totalPages: 1,
+          companies: [],
+        })
+      );
     }
   }
 
-  const upstreamPromise = Promise.all([
+  // Individual bounded timeouts guarantee one slow external connector NEVER discards completed TheOrg pages!
+  const [searchHits, federatedBatch, exploreResponses] = await Promise.all([
     supplementalQueries.length > 0
-      ? Promise.all(
-          supplementalQueries.map((qStr) => searchGlobalCompaniesByQuery(qStr))
-        ).then((lists) => interleaveCompanyBatches(lists))
+      ? withSoftTimeout(
+          Promise.all(
+            supplementalQueries.map((qStr) => searchGlobalCompaniesByQuery(qStr))
+          ).then((lists) => interleaveCompanyBatches(lists)),
+          2200,
+          [] as GlobalCompanyItem[]
+        )
       : Promise.resolve([] as GlobalCompanyItem[]),
-    fetchFederatedRegistryCompaniesForFilter({
-      countrySlugs: targetCountrySlugs,
-      companyQuery: p.companyQuery,
-      industryKeyword: p.industryKeyword,
-      page: p.page,
-    }),
-    Promise.all(exploreTasks),
-  ]);
-
-  const [searchHits, federatedBatch, exploreResponses] = await Promise.race([
-    upstreamPromise,
-    new Promise<
-      [
-        GlobalCompanyItem[],
-        Awaited<ReturnType<typeof fetchFederatedRegistryCompaniesForFilter>>,
-        GlobalCompaniesResponse[]
-      ]
-    >((resolve) =>
-      setTimeout(
-        () =>
-          resolve([
-            [],
-            {
-              companies: [],
-              officers: [],
-              confirmedEmails: [],
-              reportedTotal: 0,
-            },
-            [],
-          ]),
-        950
-      )
+    withSoftTimeout(
+      fetchFederatedRegistryCompaniesForFilter({
+        countrySlugs: targetCountrySlugs,
+        companyQuery: p.companyQuery,
+        industryKeyword: p.industryKeyword,
+        page: p.page,
+      }),
+      2400,
+      {
+        companies: [],
+        officers: [],
+        confirmedEmails: [],
+        reportedTotal: 0,
+      }
     ),
+    Promise.all(exploreTasks),
   ]);
 
   if (federatedBatch.officers.length > 0) {
@@ -1629,8 +1789,8 @@ export async function resolveFilteredGlobalCompanies(
   }
 
   const rawCandidatePool = interleaveCompanyBatches([
-    searchHits,
-    vaultResult.companies,
+    tieredVaultPool,
+    p.page === 1 ? searchHits : [],
     ...exploreResponses.map((r) => r.companies),
     federatedBatch.companies,
   ]);
@@ -1638,7 +1798,11 @@ export async function resolveFilteredGlobalCompanies(
   const nameQ = p.companyQuery.toLowerCase();
   const indKw = p.industryKeyword.toLowerCase();
 
-  const filteredCandidates = rawCandidatePool.filter((comp) => {
+  const matchesCoreScope = (
+    comp: GlobalCompanyItem,
+    enforceStrictBrackets: boolean,
+    allowGlobalNullGeo: boolean
+  ): boolean => {
     if (
       nameQ &&
       !comp.name.toLowerCase().includes(nameQ) &&
@@ -1657,7 +1821,15 @@ export async function resolveFilteredGlobalCompanies(
       const taggedDirectly =
         p.industryMatchMode !== 'primary' &&
         Boolean(comp.sourceIndustrySlugs?.some((s) => p.rawSlugs.includes(s)));
-      if (!taggedDirectly && industryKeywordTokens.length > 0) {
+      const matchesTld =
+        industryTldHints.length > 0 &&
+        Boolean(
+          comp.domain &&
+            industryTldHints.some((tld) =>
+              comp.domain!.toLowerCase().endsWith(tld)
+            )
+        );
+      if (!taggedDirectly && !matchesTld && industryKeywordTokens.length > 0) {
         const hay =
           p.industryMatchMode === 'primary'
             ? (comp.industry.split(',')[0] || '').toLowerCase()
@@ -1668,18 +1840,24 @@ export async function resolveFilteredGlobalCompanies(
       }
     }
     if (
+      enforceStrictBrackets &&
       p.employeeRanges.length > 0 &&
       !p.employeeRanges.includes(comp.employeeRange)
     ) {
       return false;
     }
     if (
+      enforceStrictBrackets &&
       p.revenueRanges.length > 0 &&
       !p.revenueRanges.includes(comp.revenueRange)
     ) {
       return false;
     }
+    const isUntaggedGlobal =
+      !comp.sourceCountrySlug &&
+      (!comp.location || comp.location.toLowerCase() === 'global');
     if (
+      !(allowGlobalNullGeo && isUntaggedGlobal) &&
       !matchesGeographyFilter(
         comp.location,
         p.selectedContinents,
@@ -1691,33 +1869,124 @@ export async function resolveFilteredGlobalCompanies(
       return false;
     }
     return true;
-  });
+  };
 
-  // Resolve real official corporate websites synchronously in one fast GraphQL/Clearbit batch (< 0.75s)
+  let filteredCandidates = rawCandidatePool.filter((c) =>
+    matchesCoreScope(c, true, !p.locationQuery.trim())
+  );
+
+  // Relax employee/revenue brackets on upstream cards lacking granular brackets while keeping exact industry + geo
+  if (
+    filteredCandidates.length < COMPANIES_PER_PAGE &&
+    (p.employeeRanges.length > 0 || p.revenueRanges.length > 0)
+  ) {
+    const seenSlugs = new Set(filteredCandidates.map((c) => c.slug));
+    const relaxedUpstream = rawCandidatePool.filter(
+      (c) => !seenSlugs.has(c.slug) && matchesCoreScope(c, false, !p.locationQuery.trim())
+    );
+    filteredCandidates = [...filteredCandidates, ...relaxedUpstream];
+  }
+
+  // 5. TIER 4: Same-Scope SQLite Top-Up so filtered pagination strictly delivers 500/page until true end!
+  const appendUniqueCandidates = (items: GlobalCompanyItem[]) => {
+    const seenSlugs = new Set(filteredCandidates.map((c) => c.slug));
+    const seenDoms = new Set(
+      filteredCandidates
+        .map((c) => (c.domain || '').toLowerCase())
+        .filter(Boolean)
+    );
+    for (const comp of items) {
+      const dom = (comp.domain || '').toLowerCase();
+      if (!seenSlugs.has(comp.slug) && (!dom || !seenDoms.has(dom))) {
+        seenSlugs.add(comp.slug);
+        if (dom) seenDoms.add(dom);
+        filteredCandidates.push(comp);
+        if (filteredCandidates.length >= COMPANIES_PER_PAGE + 100) break;
+      }
+    }
+  };
+
+  // 5a. If employee/revenue brackets narrowed SQLite < 500, top up within exact same country + industry
+  if (
+    filteredCandidates.length < COMPANIES_PER_PAGE + 60 &&
+    !hasFreeText &&
+    (p.employeeRanges.length > 0 || p.revenueRanges.length > 0)
+  ) {
+    const relaxedBracketExactGeo = queryVaultCompanies({
+      countrySlugs:
+        targetCountrySlugs.length > 0 ? targetCountrySlugs : undefined,
+      industryTokens:
+        industryKeywordTokens.length > 0 ? industryKeywordTokens : undefined,
+      industryTlds: industryTldHints.length > 0 ? industryTldHints : undefined,
+      requireRealDomain: true,
+      page: p.page,
+      perPage: COMPANIES_PER_PAGE,
+      extraBuffer: 80,
+    });
+    appendUniqueCandidates(relaxedBracketExactGeo.companies);
+
+    if (
+      filteredCandidates.length < COMPANIES_PER_PAGE + 40 &&
+      targetCountrySlugs.length > 0
+    ) {
+      const relaxedBracketGlobal = queryVaultCompanies({
+        nullCountryOnly: true,
+        industryTokens:
+          industryKeywordTokens.length > 0 ? industryKeywordTokens : undefined,
+        industryTlds: industryTldHints.length > 0 ? industryTldHints : undefined,
+        requireRealDomain: true,
+        page: p.page,
+        perPage: COMPANIES_PER_PAGE,
+        extraBuffer: 80,
+      });
+      appendUniqueCandidates(relaxedBracketGlobal.companies);
+    }
+  }
+
+  // 5b. If an industry + country filter STILL has < 500 after exact country + untagged global + upstream TheOrg,
+  // include remaining exact-industry matches from other countries (disjoint offset) so niche industries fill 500/page!
+  if (
+    filteredCandidates.length < COMPANIES_PER_PAGE + 40 &&
+    !hasFreeText &&
+    p.rawSlugs.length > 0 &&
+    targetCountrySlugs.length > 0
+  ) {
+    const tier2ExactCount = countVaultCompaniesFast({
+      nullCountryOnly: true,
+      industryTokens:
+        industryKeywordTokens.length > 0 ? industryKeywordTokens : undefined,
+      industryTlds: industryTldHints.length > 0 ? industryTldHints : undefined,
+      requireRealDomain: true,
+    });
+    const tier4Offset = Math.max(
+      0,
+      pageGlobalStart - (tier1TotalCount + tier2ExactCount)
+    );
+    const otherCountriesSameIndustry = queryVaultCompanies({
+      excludeCountrySlugs: targetCountrySlugs,
+      industryTokens:
+        industryKeywordTokens.length > 0 ? industryKeywordTokens : undefined,
+      industryTlds: industryTldHints.length > 0 ? industryTldHints : undefined,
+      requireRealDomain: true,
+      page: p.page,
+      perPage: COMPANIES_PER_PAGE,
+      extraBuffer: 80,
+      offsetOverride: tier4Offset,
+    });
+    appendUniqueCandidates(otherCountriesSameIndustry.companies);
+  }
+
+  // Resolve real official corporate websites synchronously in one fast GraphQL/Clearbit batch
   const resolvedWithRealDomains = await resolveRealCompanyDomainsBatch(
-    filteredCandidates.slice(0, 260),
+    filteredCandidates.slice(0, COMPANIES_PER_PAGE + 140),
     {
-      maxClearbitLookups: 12,
-      timeoutMs: 750,
+      maxClearbitLookups: 36,
+      timeoutMs: 2400,
     }
   );
 
   if (resolvedWithRealDomains.length > 0) {
     upsertVaultCompanies(resolvedWithRealDomains, 'TheOrg Directory');
-  }
-
-  // Warm even more companies in background if pool exceeded 260
-  if (filteredCandidates.length > 260) {
-    void (async () => {
-      try {
-        const rest = await enrichCompaniesWithWebsites(
-          filteredCandidates.slice(260, 500)
-        );
-        upsertVaultCompanies(rest, 'TheOrg Directory');
-      } catch {
-        // Non-fatal
-      }
-    })();
   }
 
   const pageCompanies = attachLocalPatternAndConfirmedMetadata(
@@ -1731,27 +2000,27 @@ export async function resolveFilteredGlobalCompanies(
     .map((entry) => entry.comp)
     .slice(0, COMPANIES_PER_PAGE);
 
-  // Trigger background fetch for pages 5..8 so SQLite keeps filling toward 500+/page
-  if (pageCompanies.length < 300) {
+  // Trigger background fetch for next upstream batch so SQLite keeps growing
+  if (pageCompanies.length < COMPANIES_PER_PAGE && !hasFreeText) {
     refreshUpstreamDirectoryInBackground(cacheKey, p, targetCountrySlugs);
   }
 
-  const hasFreeText = Boolean(
-    p.companyQuery.trim() || p.locationQuery.trim() || p.industryKeyword.trim()
-  );
-
-  const accurateTotalCompanies =
-    pageCompanies.length === 0 && hasFreeText
-      ? 0
-      : hasFreeText
-      ? Math.max(
-          (p.page - 1) * COMPANIES_PER_PAGE + pageCompanies.length,
-          facets.totalMatchedCompanies
-        )
-      : Math.max(
-          (p.page - 1) * COMPANIES_PER_PAGE + pageCompanies.length,
-          facets.totalMatchedCompanies
-        );
+  // Enforce strict 500/page until the true end of the list:
+  // If this page returned fewer than 500 after all 4 tiers, cap accurateTotalCompanies to the exact end of the list
+  // so displayed total and pagination stay 100% consistent with zero phantom pages!
+  let accurateTotalCompanies = facets.totalMatchedCompanies;
+  if (pageCompanies.length === 0) {
+    accurateTotalCompanies =
+      p.page === 1 ? 0 : Math.max(0, (p.page - 1) * COMPANIES_PER_PAGE);
+  } else if (pageCompanies.length < COMPANIES_PER_PAGE) {
+    accurateTotalCompanies =
+      (p.page - 1) * COMPANIES_PER_PAGE + pageCompanies.length;
+  } else {
+    accurateTotalCompanies = Math.max(
+      p.page * COMPANIES_PER_PAGE,
+      facets.totalMatchedCompanies
+    );
+  }
 
   const totalPages =
     accurateTotalCompanies === 0
@@ -1773,10 +2042,17 @@ export async function resolveFilteredGlobalCompanies(
     liveFederatedCatalogTotal: facets.liveFederatedCatalogTotal,
   };
 
-  filteredDirectoryRamCache.set(cacheKey, {
-    data: fallbackPayload,
-    expiresAt: Date.now() + 300_000,
-  });
+  // NEVER cache empty pages so transient timeouts can never poison pagination!
+  if (pageCompanies.length > 0) {
+    if (filteredDirectoryRamCache.size > 200) {
+      const oldest = filteredDirectoryRamCache.keys().next().value;
+      if (oldest) filteredDirectoryRamCache.delete(oldest);
+    }
+    filteredDirectoryRamCache.set(cacheKey, {
+      data: fallbackPayload,
+      expiresAt: Date.now() + 300_000,
+    });
+  }
 
   return fallbackPayload;
 }

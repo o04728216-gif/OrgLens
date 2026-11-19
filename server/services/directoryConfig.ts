@@ -218,22 +218,168 @@ export const ISO2_TO_COUNTRY_LABEL: Record<string, string> = {
 };
 
 /**
- * Pure lexical search tokens used when matching cross-registry industry labels.
+ * Pure lexical search tokens used when matching cross-registry industry labels and verified domains.
+ * Keep each list focused (top 6 highest-signal stems) for ultra-fast (< 100ms) SQLite matching.
  */
 export const INDUSTRY_SYNONYM_MAP: Record<string, string[]> = {
-  software: ['software', 'saas', 'cloud', 'platform', 'developer', 'information technology'],
-  'financial-services': ['financial', 'fintech', 'bank', 'banking', 'investment', 'insurance', 'capital', 'payments', 'wealth'],
-  healthcare: ['health', 'healthcare', 'medical', 'hospital', 'clinical', 'patient', 'pharma'],
-  biotechnology: ['biotech', 'biotechnology', 'therapeutics', 'genomics', 'life sciences', 'biosciences'],
-  manufacturing: ['manufacturing', 'industrial', 'machinery', 'factory', 'engineering', 'materials'],
-  retail: ['retail', 'ecommerce', 'e-commerce', 'commerce', 'consumer', 'merchandise', 'store'],
-  'real-estate': ['real estate', 'property', 'construction', 'housing', 'architecture'],
-  energy: ['energy', 'solar', 'power', 'oil', 'gas', 'renewable', 'utilities', 'electricity'],
-  transportation: ['logistics', 'transport', 'shipping', 'freight', 'automotive', 'aviation', 'supply chain'],
-  telecommunications: ['telecom', 'telecommunications', 'wireless', 'network', 'broadband'],
-  education: ['education', 'edtech', 'university', 'learning', 'school', 'academic', 'training'],
-  'artificial-intelligence': ['artificial intelligence', 'machine learning', 'ai', 'data science', 'robotics'],
-  cybersecurity: ['security', 'cybersecurity', 'infosec', 'identity'],
-  media: ['media', 'publishing', 'entertainment', 'broadcasting', 'gaming', 'advertising', 'marketing'],
-  legal: ['legal', 'law', 'attorneys', 'compliance'],
+  // Nonprofit, Charity, Civic & Religion
+  charity: ['charity', 'nonprofit', 'non-profit', 'foundation', 'philanthrop', 'relief'],
+  'non-profit': ['non-profit', 'nonprofit', 'charity', 'foundation', 'association', 'philanthrop'],
+  nonprofit: ['nonprofit', 'non-profit', 'charity', 'foundation', 'association', 'philanthrop'],
+  'non-profit-organization-management': ['non-profit', 'nonprofit', 'charity', 'foundation', 'association', 'civic'],
+  philanthropy: ['philanthrop', 'foundation', 'charity', 'nonprofit', 'giving', 'endowment'],
+  'fund-raising': ['fundrais', 'charity', 'foundation', 'nonprofit', 'donate', 'philanthrop'],
+  'civic-social-organization': ['civic', 'community', 'association', 'foundation', 'nonprofit', 'society'],
+  religion: ['church', 'ministry', 'faith', 'diocese', 'religious', 'mission'],
+  'religious-institutions': ['church', 'ministry', 'diocese', 'parish', 'faith', 'mission'],
+  humanitarian: ['humanitarian', 'relief', 'charity', 'aid', 'rescue', 'foundation'],
+
+  // Technology, Software, AI & Telecom
+  software: ['software', 'saas', 'cloud', 'platform', 'developer', 'tech'],
+  'computer-software': ['software', 'saas', 'cloud', 'platform', 'tech', 'app'],
+  saas: ['saas', 'software', 'cloud', 'platform', 'analytics', 'automation'],
+  'information-technology': ['information technology', 'software', 'cloud', 'tech', 'systems', 'digital'],
+  'information-technology-and-services': ['information technology', 'software', 'cloud', 'tech', 'systems', 'digital'],
+  internet: ['internet', 'web', 'digital', 'online', 'cloud', 'platform'],
+  'artificial-intelligence': ['artificial intelligence', 'machine learning', 'robotics', 'neural', 'automation', 'data'],
+  cybersecurity: ['security', 'cyber', 'infosec', 'identity', 'defense', 'protect'],
+  'computer-and-network-security': ['security', 'cyber', 'network', 'infosec', 'firewall', 'protect'],
+  hardware: ['hardware', 'semiconductor', 'electronics', 'device', 'chip', 'circuit'],
+  'computer-hardware': ['hardware', 'computer', 'semiconductor', 'electronics', 'chip', 'server'],
+  semiconductors: ['semiconductor', 'chip', 'silicon', 'micro', 'wafer', 'electronics'],
+  electronics: ['electronic', 'circuit', 'sensor', 'hardware', 'electric', 'device'],
+  telecommunications: ['telecom', 'wireless', 'network', 'broadband', 'mobile', 'fiber'],
+  'data-analytics': ['analytics', 'data', 'intelligence', 'metrics', 'insights', 'cloud'],
+  'cloud-computing': ['cloud', 'hosting', 'server', 'infra', 'devops', 'saas'],
+
+  // Healthcare, Biotech & Pharma
+  healthcare: ['health', 'medical', 'hospital', 'clinic', 'patient', 'care'],
+  'health-care': ['health', 'medical', 'hospital', 'clinic', 'patient', 'care'],
+  'hospital-health-care': ['hospital', 'health', 'medical', 'clinic', 'care', 'patient'],
+  medical: ['medical', 'health', 'clinic', 'hospital', 'diagnostic', 'therapy'],
+  'medical-devices': ['medical', 'device', 'diagnostic', 'surgical', 'health', 'medtech'],
+  biotechnology: ['biotech', 'therapeutics', 'genomic', 'bioscience', 'life science', 'pharma'],
+  pharmaceuticals: ['pharma', 'drug', 'therapeutics', 'medicine', 'biotech', 'clinical'],
+  'mental-health-care': ['mental health', 'therapy', 'counseling', 'behavioral', 'wellness', 'clinic'],
+  'health-wellness-and-fitness': ['wellness', 'fitness', 'health', 'nutrition', 'gym', 'wellbeing'],
+
+  // Finance, Banking, Insurance & Legal
+  'financial-services': ['financial', 'fintech', 'bank', 'capital', 'investment', 'wealth'],
+  banking: ['bank', 'credit', 'financial', 'capital', 'mortgage', 'lending'],
+  fintech: ['fintech', 'payment', 'financial', 'bank', 'crypto', 'wallet'],
+  insurance: ['insur', 'underwrit', 'actuar', 'mutual', 'assurance', 'indemnity'],
+  accounting: ['account', 'audit', 'tax', 'cpa', 'bookkeep', 'advisory'],
+  'venture-capital': ['venture', 'capital', 'invest', 'equity', 'fund', 'partners'],
+  'investment-management': ['invest', 'asset', 'capital', 'wealth', 'fund', 'portfolio'],
+  'investment-banking': ['invest', 'capital', 'securities', 'bank', 'advisory', 'markets'],
+  legal: ['legal', 'law', 'attorney', 'lawyer', 'counsel', 'litigation'],
+  'law-practice': ['law', 'legal', 'attorney', 'lawyer', 'counsel', 'llp'],
+  'legal-services': ['legal', 'law', 'attorney', 'compliance', 'counsel', 'patent'],
+
+  // Real Estate, Construction & Architecture
+  'real-estate': ['real estate', 'realty', 'property', 'housing', 'mortgage', 'homes'],
+  construction: ['construct', 'builder', 'contractor', 'civil', 'building', 'engineering'],
+  'architecture-planning': ['architect', 'design', 'urban', 'planning', 'studio', 'engineering'],
+  architecture: ['architect', 'design', 'planning', 'building', 'engineering', 'studio'],
+  'civil-engineering': ['civil', 'engineering', 'infrastructure', 'construct', 'structural', 'survey'],
+
+  // Automotive, Aerospace, Logistics & Transportation
+  automotive: ['auto', 'motor', 'vehicle', 'car', 'truck', 'mobility'],
+  aerospace: ['aerospace', 'aviation', 'flight', 'aircraft', 'space', 'defense'],
+  'aviation-aerospace': ['aviation', 'aerospace', 'airline', 'aircraft', 'flight', 'jet'],
+  transportation: ['transport', 'logistics', 'shipping', 'freight', 'transit', 'fleet'],
+  logistics: ['logistics', 'freight', 'shipping', 'supply chain', 'cargo', 'warehouse'],
+  'logistics-and-supply-chain': ['logistics', 'supply chain', 'freight', 'shipping', 'cargo', 'warehouse'],
+  maritime: ['maritime', 'marine', 'shipping', 'vessel', 'port', 'ocean'],
+
+  // Manufacturing, Industrial, Energy & Materials
+  manufacturing: ['manufactur', 'industrial', 'machinery', 'factory', 'metal', 'steel'],
+  machinery: ['machinery', 'machine', 'industrial', 'equipment', 'manufactur', 'automation'],
+  energy: ['energy', 'solar', 'power', 'renewable', 'utility', 'electric'],
+  'oil-energy': ['oil', 'gas', 'energy', 'petroleum', 'power', 'fuel'],
+  renewables: ['solar', 'wind', 'renewable', 'clean', 'energy', 'green'],
+  'renewables-environment': ['solar', 'renewable', 'environ', 'clean', 'energy', 'sustain'],
+  utilities: ['utility', 'power', 'electric', 'water', 'energy', 'grid'],
+  mining: ['mining', 'mineral', 'metals', 'gold', 'copper', 'resource'],
+  'mining-metals': ['mining', 'metal', 'steel', 'aluminum', 'mineral', 'alloy'],
+  chemicals: ['chemical', 'polymer', 'materials', 'resin', 'industrial', 'coatings'],
+  'environmental-services': ['environ', 'recycl', 'waste', 'sustain', 'water', 'ecology'],
+
+  // Agriculture, Food & Hospitality
+  agriculture: ['agri', 'farm', 'crop', 'dairy', 'ranch', 'harvest'],
+  farming: ['farm', 'agri', 'crop', 'livestock', 'dairy', 'organic'],
+  'food-beverages': ['food', 'beverage', 'bakery', 'brew', 'coffee', 'organic'],
+  'food-and-beverage': ['food', 'beverage', 'bakery', 'brew', 'coffee', 'kitchen'],
+  'food-production': ['food', 'dairy', 'meat', 'grain', 'bakery', 'beverage'],
+  restaurants: ['restaurant', 'cafe', 'bistro', 'pizza', 'grill', 'dining'],
+  hospitality: ['hotel', 'resort', 'hospitality', 'inn', 'lodge', 'travel'],
+  travel: ['travel', 'tour', 'hotel', 'airline', 'vacation', 'cruise'],
+  'leisure-travel-tourism': ['travel', 'tour', 'resort', 'hotel', 'leisure', 'vacation'],
+
+  // Retail, E-Commerce, Fashion & Consumer
+  retail: ['retail', 'shop', 'store', 'ecommerce', 'commerce', 'market'],
+  'e-commerce': ['ecommerce', 'shop', 'store', 'commerce', 'retail', 'market'],
+  ecommerce: ['ecommerce', 'shop', 'store', 'commerce', 'retail', 'market'],
+  fashion: ['fashion', 'apparel', 'clothing', 'wear', 'boutique', 'style'],
+  'apparel-fashion': ['apparel', 'fashion', 'clothing', 'wear', 'shoes', 'textile'],
+  cosmetics: ['cosmetic', 'beauty', 'skin', 'hair', 'makeup', 'fragrance'],
+  'consumer-goods': ['consumer', 'brand', 'home', 'goods', 'product', 'lifestyle'],
+  'sporting-goods': ['sport', 'athletic', 'outdoor', 'gear', 'fitness', 'bike'],
+
+  // Media, Marketing, Entertainment & Sports
+  media: ['media', 'publish', 'news', 'broadcast', 'press', 'studio'],
+  'marketing-and-advertising': ['marketing', 'advertis', 'agency', 'brand', 'media', 'creative'],
+  marketing: ['marketing', 'agency', 'brand', 'digital', 'seo', 'advertis'],
+  advertising: ['advertis', 'agency', 'media', 'brand', 'marketing', 'creative'],
+  entertainment: ['entertain', 'film', 'studio', 'music', 'cinema', 'theater'],
+  gaming: ['game', 'gaming', 'esport', 'studio', 'interactive', 'play'],
+  'computer-games': ['game', 'gaming', 'studio', 'interactive', 'esport', 'play'],
+  music: ['music', 'audio', 'record', 'sound', 'band', 'concert'],
+  publishing: ['publish', 'press', 'book', 'magazine', 'journal', 'news'],
+  sports: ['sport', 'athletic', 'club', 'league', 'team', 'fitness'],
+
+  // Consulting, HR, Education & Government
+  'management-consulting': ['consult', 'advisory', 'strategy', 'partners', 'solutions', 'management'],
+  consulting: ['consult', 'advisory', 'strategy', 'partners', 'solutions', 'group'],
+  'staffing-and-recruiting': ['staffing', 'recruit', 'talent', 'hiring', 'career', 'workforce'],
+  'human-resources': ['human resource', 'talent', 'recruit', 'workforce', 'payroll', 'staffing'],
+  education: ['educat', 'school', 'universit', 'college', 'academ', 'learn'],
+  'higher-education': ['universit', 'college', 'academ', 'institute', 'campus', 'school'],
+  'e-learning': ['learn', 'course', 'academ', 'edtech', 'tutor', 'educat'],
+  research: ['research', 'institute', 'lab', 'science', 'academ', 'study'],
+  government: ['gov', 'municipal', 'public', 'city', 'county', 'state'],
+  'government-administration': ['gov', 'municipal', 'public', 'council', 'city', 'agency'],
+  defense: ['defense', 'military', 'aerospace', 'security', 'tactical', 'space'],
+  'defense-space': ['defense', 'space', 'aerospace', 'military', 'satellite', 'aviation'],
 };
+
+/**
+ * Domain TLD hints that accurately identify industry cohorts across our 883k-domain vault
+ * (e.g., `.org` for charities/non-profits, `.edu` for universities, `.gov` for public sector).
+ */
+export const INDUSTRY_TLD_HINTS: Record<string, string[]> = {
+  charity: ['.org'],
+  'non-profit': ['.org'],
+  nonprofit: ['.org'],
+  'non-profit-organization-management': ['.org'],
+  philanthropy: ['.org'],
+  'fund-raising': ['.org'],
+  'civic-social-organization': ['.org'],
+  religion: ['.org'],
+  'religious-institutions': ['.org'],
+  humanitarian: ['.org'],
+  education: ['.edu', '.ac.uk'],
+  'higher-education': ['.edu', '.ac.uk'],
+  'primary-secondary-education': ['.edu'],
+  research: ['.edu', '.org'],
+  government: ['.gov'],
+  'government-administration': ['.gov'],
+  'public-policy': ['.gov', '.org'],
+  defense: ['.mil', '.gov'],
+  software: ['.io', '.ai', '.dev'],
+  'computer-software': ['.io', '.ai', '.dev'],
+  saas: ['.io', '.ai', '.app'],
+  'artificial-intelligence': ['.ai', '.io'],
+  'information-technology': ['.io', '.tech'],
+};
+

@@ -74,8 +74,7 @@ export const SignOutConfirmModal: React.FC<SignOutConfirmModalProps> = ({
         </div>
 
         <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-          Are you sure you want to sign out now? Your Lens Coins, plan status,
-          and saved company snapshots remain safely stored.
+          Are you sure you want to sign out now?
         </p>
 
         <div className="flex items-center justify-end gap-2.5 pt-1">

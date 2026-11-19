@@ -3,7 +3,6 @@ import {
   ArrowRight,
   Eye,
   EyeOff,
-  Loader2,
   Moon,
   Send,
   Sun,
@@ -323,27 +322,14 @@ export const B2BLandingAuthPage: React.FC<B2BLandingAuthPageProps> = ({
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white transition-colors cursor-pointer"
+                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold bg-sky-600 hover:bg-sky-500 disabled:opacity-80 text-white transition-colors cursor-pointer"
                 >
-                  {submitting ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <span>
-                        {authMode === 'signup'
-                          ? 'Provisioning Workspace...'
-                          : 'Verifying...'}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span>
-                        {authMode === 'signup'
-                          ? 'Create Workspace Account'
-                          : 'Access Directory Workspace'}
-                      </span>
-                      <ArrowRight className="h-4 w-4" />
-                    </>
-                  )}
+                  <span>
+                    {authMode === 'signup'
+                      ? 'Create Workspace Account'
+                      : 'Access Directory Workspace'}
+                  </span>
+                  <ArrowRight className="h-4 w-4" />
                 </button>
               </form>
 

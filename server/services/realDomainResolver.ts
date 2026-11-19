@@ -414,7 +414,7 @@ export async function resolveRealCompanyDomainsBatch(
 
   // 4. Batch resolve TheOrg official websites via GraphQL
   if (needsTheOrgSlugs.length > 0) {
-    const uniqueSlugs = Array.from(new Set(needsTheOrgSlugs)).slice(0, 180);
+    const uniqueSlugs = Array.from(new Set(needsTheOrgSlugs)).slice(0, 500);
     const chunks: string[][] = [];
     for (let i = 0; i < uniqueSlugs.length; i += 80) {
       chunks.push(uniqueSlugs.slice(i, i + 80));

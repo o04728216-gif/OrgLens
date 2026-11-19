@@ -46,6 +46,8 @@ interface JobTitleTabProps {
   onBackToCompaniesList?: () => void;
   globalPage?: number;
   onChangeGlobalPage?: (page: number) => void;
+  isPageCached?: (page: number) => boolean;
+  onPrefetchPage?: (page: number) => void;
   rolesPage?: number;
   onChangeRolesPage?: (page: number) => void;
   urlRoleQuery?: string;
@@ -73,6 +75,8 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
   onBackToCompaniesList,
   globalPage = 1,
   onChangeGlobalPage,
+  isPageCached,
+  onPrefetchPage,
   rolesPage,
   onChangeRolesPage,
   urlRoleQuery,
@@ -247,7 +251,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
         selectedDepartment === 'All' &&
         selectedSeniority === 'All' &&
         !roleFilter.trim() &&
-        sessionMode === 'domain'
+        emp.rank > 0
           ? emp.rank
           : idx + 1,
     }));
@@ -256,7 +260,6 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     selectedSeniority,
     selectedDepartment,
     roleFilter,
-    sessionMode,
   ]);
 
   const localTotalPages = Math.max(
@@ -306,7 +309,11 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
 
     if (useServerBatchPagination && onChangeGlobalPage) {
       if (bounded === globalPage && !isPaginationLoading) return;
-      setRequestedServerPage(bounded);
+      if (isPageCached?.(bounded)) {
+        setRequestedServerPage(null);
+      } else {
+        setRequestedServerPage(bounded);
+      }
       onChangeGlobalPage(bounded);
       return;
     }
@@ -314,13 +321,10 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     if (bounded === safePage) return;
     if (localPageTimerRef.current !== null) {
       window.clearTimeout(localPageTimerRef.current);
-    }
-    setLocalPageLoadingTarget(bounded);
-    localPageTimerRef.current = window.setTimeout(() => {
-      updateCurrentPage(bounded);
-      setLocalPageLoadingTarget(null);
       localPageTimerRef.current = null;
-    }, 170);
+    }
+    setLocalPageLoadingTarget(null);
+    updateCurrentPage(bounded);
   };
 
   const isInitialLoading =
@@ -500,11 +504,41 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
       </div>
 
       {/* Ranked Command Hierarchy HTML <table> */}
-      {filtered.length === 0 ? (
+      {filtered.length === 0 && (isFilterLoading || isPaginationLoading) ? (
+        <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80">
+          <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
+          <span>
+            Loading page {targetPaginationPage.toLocaleString()} hierarchy (500/page)...
+          </span>
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="py-10 px-4 text-center rounded-xl border border-slate-200/80 dark:border-slate-800/80">
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-            No roles match the selected authority tier or search filter.
+            {sessionMode === 'filter' && !isViewingFilterCompany && globalPage > 1
+              ? `No additional indexed roles were found on page ${globalPage.toLocaleString()} for this filter.`
+              : 'No roles match the selected authority tier or search filter.'}
           </p>
+          {sessionMode === 'filter' &&
+            !isViewingFilterCompany &&
+            globalPage > 1 &&
+            onChangeGlobalPage && (
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSelectRolesPage(globalPage - 1)}
+                  className="min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Previous Page ({(globalPage - 1).toLocaleString()})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectRolesPage(1)}
+                  className="min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+                >
+                  Return to Page 1
+                </button>
+              </div>
+            )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -653,11 +687,10 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
         totalPages={totalPages}
         isLoading={isPaginationLoading}
         targetPage={targetPaginationPage}
-        perPageLabel={
-          useServerBatchPagination ? '500 orgs/batch' : '500/page'
-        }
+        perPageLabel="500/page"
         loadingLabel={`Loading page ${targetPaginationPage.toLocaleString()}...`}
         onSelectPage={handleSelectRolesPage}
+        onPrefetchPage={useServerBatchPagination ? onPrefetchPage : undefined}
       />
     </div>
   );

@@ -9,6 +9,7 @@ interface PaginationControlsProps {
   perPageLabel?: string;
   loadingLabel?: string;
   onSelectPage: (page: number) => void;
+  onPrefetchPage?: (page: number) => void;
 }
 
 export const PaginationControls: React.FC<PaginationControlsProps> = ({
@@ -19,6 +20,7 @@ export const PaginationControls: React.FC<PaginationControlsProps> = ({
   perPageLabel = '500/page',
   loadingLabel,
   onSelectPage,
+  onPrefetchPage,
 }) => {
   const visiblePageNumbers = useMemo(() => {
     const maxButtons = 9;
@@ -61,6 +63,12 @@ export const PaginationControls: React.FC<PaginationControlsProps> = ({
         <button
           type="button"
           disabled={currentPage <= 1 || isLoading}
+          onMouseEnter={() => {
+            if (currentPage > 1) onPrefetchPage?.(currentPage - 1);
+          }}
+          onTouchStart={() => {
+            if (currentPage > 1) onPrefetchPage?.(currentPage - 1);
+          }}
           onClick={() => onSelectPage(currentPage - 1)}
           aria-label="Previous page"
           className="inline-flex items-center justify-center min-h-[42px] min-w-[42px] sm:min-h-9 sm:min-w-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"
@@ -76,6 +84,12 @@ export const PaginationControls: React.FC<PaginationControlsProps> = ({
               key={pg}
               type="button"
               disabled={isLoading && pg !== targetPage}
+              onMouseEnter={() => {
+                if (pg !== currentPage) onPrefetchPage?.(pg);
+              }}
+              onTouchStart={() => {
+                if (pg !== currentPage) onPrefetchPage?.(pg);
+              }}
               onClick={() => onSelectPage(pg)}
               className={`inline-flex items-center justify-center gap-1.5 min-w-[42px] min-h-[42px] sm:min-w-9 sm:min-h-9 px-2.5 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors cursor-pointer ${
                 active || isTargetLoading
@@ -94,6 +108,12 @@ export const PaginationControls: React.FC<PaginationControlsProps> = ({
         <button
           type="button"
           disabled={currentPage >= totalPages || isLoading}
+          onMouseEnter={() => {
+            if (currentPage < totalPages) onPrefetchPage?.(currentPage + 1);
+          }}
+          onTouchStart={() => {
+            if (currentPage < totalPages) onPrefetchPage?.(currentPage + 1);
+          }}
           onClick={() => onSelectPage(currentPage + 1)}
           aria-label="Next page"
           className="inline-flex items-center justify-center min-h-[42px] min-w-[42px] sm:min-h-9 sm:min-w-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer"

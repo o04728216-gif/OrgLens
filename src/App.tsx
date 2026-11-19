@@ -174,6 +174,7 @@ export default function App() {
   const [isFilterLoading, setIsFilterLoading] = useState(false);
   // Tracks explicit user clicks on pagination buttons so pagination fetches on demand with a clear loading indicator
   const paginationRequestedPageRef = useRef<number | null>(null);
+  const [authSubmittingOverlay, setAuthSubmittingOverlay] = useState(false);
   const [postLoginOverlayVisible, setPostLoginOverlayVisible] = useState(false);
   const postLoginStartedAtRef = useRef<number>(0);
   const [signOutConfirmOpen, setSignOutConfirmOpen] = useState(false);
@@ -689,66 +690,168 @@ export default function App() {
     effectiveOffline,
   ]);
 
-  // 1. Worldwide Companies Loader — Page 1 stays silent in background; pagination fetches ON DEMAND with clear loading feedback!
+  const inFlightCompanyPrefetchRef = useRef<
+    Map<string, Promise<GlobalCompaniesResponse | null>>
+  >(new Map());
+  const inFlightExplorerPrefetchRef = useRef<
+    Map<string, Promise<FilterExplorerResponse | null>>
+  >(new Map());
+
+  const isCompaniesPageCached = useCallback(
+    (page: number) => directoryPageCacheRef.current.has(buildCompanyParams(page)),
+    [buildCompanyParams]
+  );
+
+  const isExplorerPageCached = useCallback(
+    (page: number) =>
+      explorerPageCacheRef.current.has(buildExplorerParams(page)),
+    [buildExplorerParams]
+  );
+
+  const prefetchCompaniesPage = useCallback(
+    (page: number) => {
+      if (effectiveOffline || !user || appView !== 'workspace' || page < 1) {
+        return;
+      }
+      const queryStr = buildCompanyParams(page);
+      if (
+        directoryPageCacheRef.current.has(queryStr) ||
+        inFlightCompanyPrefetchRef.current.has(queryStr)
+      ) {
+        return;
+      }
+      const reqPromise = apiFetch(`/api/industry-companies?${queryStr}`)
+        .then((r) => (r.ok ? (r.json() as Promise<GlobalCompaniesResponse>) : null))
+        .then((payload) => {
+          if (payload && Array.isArray(payload.companies) && payload.companies.length > 0) {
+            if (directoryPageCacheRef.current.size > 300) {
+              const firstKey = directoryPageCacheRef.current.keys().next().value;
+              if (firstKey !== undefined) {
+                directoryPageCacheRef.current.delete(firstKey);
+              }
+            }
+            directoryPageCacheRef.current.set(queryStr, payload);
+          }
+          return payload;
+        })
+        .catch(() => null)
+        .finally(() => {
+          inFlightCompanyPrefetchRef.current.delete(queryStr);
+        });
+      inFlightCompanyPrefetchRef.current.set(queryStr, reqPromise);
+    },
+    [effectiveOffline, user, appView, buildCompanyParams]
+  );
+
+  const prefetchExplorerPage = useCallback(
+    (page: number) => {
+      if (effectiveOffline || !user || appView !== 'workspace' || page < 1) {
+        return;
+      }
+      const queryStr = buildExplorerParams(page);
+      if (
+        explorerPageCacheRef.current.has(queryStr) ||
+        inFlightExplorerPrefetchRef.current.has(queryStr)
+      ) {
+        return;
+      }
+      const reqPromise = apiFetch(`/api/filter-explorer?${queryStr}`)
+        .then((r) => (r.ok ? (r.json() as Promise<FilterExplorerResponse>) : null))
+        .then((payload) => {
+          if (
+            payload &&
+            Array.isArray(payload.employees) &&
+            (payload.employees.length > 0 || payload.totalMatchedCompanies === 0)
+          ) {
+            if (explorerPageCacheRef.current.size > 150) {
+              const firstKey = explorerPageCacheRef.current.keys().next().value;
+              if (firstKey !== undefined) {
+                explorerPageCacheRef.current.delete(firstKey);
+              }
+            }
+            explorerPageCacheRef.current.set(queryStr, payload);
+          }
+          return payload;
+        })
+        .catch(() => null)
+        .finally(() => {
+          inFlightExplorerPrefetchRef.current.delete(queryStr);
+        });
+      inFlightExplorerPrefetchRef.current.set(queryStr, reqPromise);
+    },
+    [effectiveOffline, user, appView, buildExplorerParams]
+  );
+
+  // 1. Worldwide Companies Loader — Instant 0ms swap on cached pages + coalesced in-flight prefetch + silent Page N+1 warm!
   useEffect(() => {
     if (effectiveOffline || !user || appView !== 'workspace') return;
 
     const queryStr = buildCompanyParams(globalPage);
     const cachedPage = directoryPageCacheRef.current.get(queryStr);
-    const isExplicitPaginationTurn =
-      paginationRequestedPageRef.current === globalPage;
 
     if (cachedPage) {
-      if (isExplicitPaginationTurn) {
-        setGlobalDirectoryLoading(true);
-        const timer = window.setTimeout(() => {
-          setGlobalDirectory((prev) =>
-            prev === cachedPage ? prev : cachedPage
-          );
-          setGlobalDirectoryLoading(false);
-          if (paginationRequestedPageRef.current === globalPage) {
-            paginationRequestedPageRef.current = null;
-          }
-        }, 160);
-        return () => window.clearTimeout(timer);
-      }
       setGlobalDirectory((prev) => (prev === cachedPage ? prev : cachedPage));
       setGlobalDirectoryLoading(false);
+      if (paginationRequestedPageRef.current === globalPage) {
+        paginationRequestedPageRef.current = null;
+      }
+      // Silently warm next page in background so continuous pagination is instant!
+      if (cachedPage.page < cachedPage.totalPages && cachedPage.companies.length >= 500) {
+        const t = window.setTimeout(() => prefetchCompaniesPage(globalPage + 1), 150);
+        return () => window.clearTimeout(t);
+      }
       return;
     }
 
-    // Show clear loading feedback on initial load, pagination clicks, or active filter updates
     setGlobalDirectoryLoading(true);
-
+    let cancelled = false;
+    let nextPrefetchTimer: number | null = null;
     const controller = new AbortController();
 
-    apiFetch(`/api/industry-companies?${queryStr}`, {
-      signal: controller.signal,
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((payload: GlobalCompaniesResponse | null) => {
+    // Reuse an already in-flight prefetch promise for this exact page if one exists!
+    const existingPrefetch = inFlightCompanyPrefetchRef.current.get(queryStr);
+    const dataPromise: Promise<GlobalCompaniesResponse | null> = existingPrefetch
+      ? existingPrefetch
+      : apiFetch(`/api/industry-companies?${queryStr}`, {
+          signal: controller.signal,
+        }).then((r) =>
+          r.ok ? (r.json() as Promise<GlobalCompaniesResponse>) : null
+        );
+
+    dataPromise
+      .then((payload) => {
         if (
+          !cancelled &&
           !controller.signal.aborted &&
           payload &&
           Array.isArray(payload.companies)
         ) {
-          if (directoryPageCacheRef.current.size > 150) {
-            const firstKey = directoryPageCacheRef.current.keys().next().value;
-            if (firstKey !== undefined) {
-              directoryPageCacheRef.current.delete(firstKey);
+          if (payload.companies.length > 0) {
+            if (directoryPageCacheRef.current.size > 300) {
+              const firstKey = directoryPageCacheRef.current.keys().next().value;
+              if (firstKey !== undefined) {
+                directoryPageCacheRef.current.delete(firstKey);
+              }
             }
+            directoryPageCacheRef.current.set(queryStr, payload);
           }
-          directoryPageCacheRef.current.set(queryStr, payload);
           startTransition(() => {
             setGlobalDirectory(payload);
           });
+          // Proactively prefetch Page N+1 once current page arrives
+          if (payload.page < payload.totalPages && payload.companies.length >= 500) {
+            nextPrefetchTimer = window.setTimeout(
+              () => prefetchCompaniesPage(globalPage + 1),
+              220
+            );
+          }
         }
       })
       .catch(() => {
         // Aborted or transient network issue
       })
       .finally(() => {
-        if (!controller.signal.aborted) {
+        if (!cancelled && !controller.signal.aborted) {
           setGlobalDirectoryLoading(false);
           if (paginationRequestedPageRef.current === globalPage) {
             paginationRequestedPageRef.current = null;
@@ -757,11 +860,20 @@ export default function App() {
       });
 
     return () => {
+      cancelled = true;
+      if (nextPrefetchTimer !== null) window.clearTimeout(nextPrefetchTimer);
       controller.abort();
     };
-  }, [user, appView, buildCompanyParams, globalPage, effectiveOffline]);
+  }, [
+    user,
+    appView,
+    buildCompanyParams,
+    globalPage,
+    effectiveOffline,
+    prefetchCompaniesPage,
+  ]);
 
-  // 2. Contact Cohort Loader — Page 1 runs silently in background; pagination batches fetch ON DEMAND with loading state!
+  // 2. Contact Cohort Loader — Instant 0ms swap on cached pages + coalesced in-flight prefetch + no contention with Companies tab!
   useEffect(() => {
     if (effectiveOffline || !user || appView !== 'workspace') return;
     if (sessionMode !== 'filter' && activeFilterCount === 0) {
@@ -774,69 +886,103 @@ export default function App() {
       paginationRequestedPageRef.current === globalPage;
 
     if (cachedExplorer) {
-      if (isExplicitPaginationTurn && activeTab !== 'industry') {
-        setIsFilterLoading(true);
-        const t = window.setTimeout(() => {
-          setFilterExplorerResult((prev) =>
-            prev === cachedExplorer ? prev : cachedExplorer
-          );
-          setIsFilterLoading(false);
-        }, 160);
-        return () => window.clearTimeout(t);
-      }
       setFilterExplorerResult((prev) =>
         prev === cachedExplorer ? prev : cachedExplorer
       );
       setIsFilterLoading(false);
+      // Warm Page N+1 silently when viewing contacts/hierarchy tabs
+      if (
+        activeTab !== 'industry' &&
+        cachedExplorer.page < cachedExplorer.totalPages &&
+        cachedExplorer.employees.length >= 500
+      ) {
+        const t = window.setTimeout(() => prefetchExplorerPage(globalPage + 1), 220);
+        return () => window.clearTimeout(t);
+      }
       return;
     }
 
+    // When user is actively browsing Companies tab, don't compete while Companies is still loading
+    if (sessionMode === 'filter' && activeTab === 'industry' && globalDirectoryLoading) {
+      return;
+    }
+
+    let cancelled = false;
+    let nextPrefetchTimer: number | null = null;
     const controller = new AbortController();
     const deferMs =
-      sessionMode === 'filter' && activeTab === 'industry' ? 40 : 0;
+      sessionMode === 'filter' && activeTab === 'industry' ? 350 : 0;
 
     const timer = window.setTimeout(() => {
-      setFilterExplorerResult((prev) => {
-        if (!prev || isExplicitPaginationTurn || globalPage > 1) {
-          setIsFilterLoading(true);
-        }
-        return prev;
-      });
+      if (activeTab !== 'industry') {
+        setFilterExplorerResult((prev) => {
+          if (!prev || isExplicitPaginationTurn || globalPage > 1) {
+            setIsFilterLoading(true);
+          }
+          return prev;
+        });
+      }
 
-      apiFetch(`/api/filter-explorer?${explorerQueryStr}`, {
-        signal: controller.signal,
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((payload: FilterExplorerResponse | null) => {
+      // Reuse an already in-flight prefetch promise for this exact page if one exists!
+      const existingPrefetch =
+        inFlightExplorerPrefetchRef.current.get(explorerQueryStr);
+      const dataPromise: Promise<FilterExplorerResponse | null> = existingPrefetch
+        ? existingPrefetch
+        : apiFetch(`/api/filter-explorer?${explorerQueryStr}`, {
+            signal: controller.signal,
+          }).then((r) =>
+            r.ok ? (r.json() as Promise<FilterExplorerResponse>) : null
+          );
+
+      dataPromise
+        .then((payload) => {
           if (
+            !cancelled &&
             !controller.signal.aborted &&
             payload &&
             Array.isArray(payload.employees)
           ) {
-            if (explorerPageCacheRef.current.size > 80) {
-              const firstKey = explorerPageCacheRef.current.keys().next().value;
-              if (firstKey !== undefined) {
-                explorerPageCacheRef.current.delete(firstKey);
+            if (
+              payload.employees.length > 0 ||
+              payload.totalMatchedCompanies === 0
+            ) {
+              if (explorerPageCacheRef.current.size > 150) {
+                const firstKey = explorerPageCacheRef.current.keys().next().value;
+                if (firstKey !== undefined) {
+                  explorerPageCacheRef.current.delete(firstKey);
+                }
               }
+              explorerPageCacheRef.current.set(explorerQueryStr, payload);
             }
-            explorerPageCacheRef.current.set(explorerQueryStr, payload);
             startTransition(() => {
               setFilterExplorerResult(payload);
             });
+            if (
+              activeTab !== 'industry' &&
+              payload.page < payload.totalPages &&
+              payload.employees.length >= 500
+            ) {
+              nextPrefetchTimer = window.setTimeout(
+                () => prefetchExplorerPage(globalPage + 1),
+                300
+              );
+            }
           }
         })
         .catch(() => {
           // Aborted or transient network issue
         })
         .finally(() => {
-          if (!controller.signal.aborted) {
+          if (!cancelled && !controller.signal.aborted) {
             setIsFilterLoading(false);
           }
         });
     }, deferMs);
 
     return () => {
+      cancelled = true;
       window.clearTimeout(timer);
+      if (nextPrefetchTimer !== null) window.clearTimeout(nextPrefetchTimer);
       controller.abort();
     };
   }, [
@@ -845,9 +991,11 @@ export default function App() {
     sessionMode,
     activeTab,
     activeFilterCount,
+    globalDirectoryLoading,
     buildExplorerParams,
     globalPage,
     effectiveOffline,
+    prefetchExplorerPage,
   ]);
 
   const filtersSnapshotRef = useRef(filters);
@@ -1600,16 +1748,55 @@ export default function App() {
   );
 
   const coherentFilterOrgsTotal = useMemo(() => {
+    const hasFreeText = Boolean(
+      filters.companyNameFilter.trim() ||
+        filters.locationQuery.trim() ||
+        filters.industryKeyword.trim()
+    );
+    if (hasFreeText && globalDirectory) {
+      return globalDirectory.totalCompanies;
+    }
+    if (
+      globalDirectory &&
+      !globalDirectoryLoading &&
+      globalDirectory.page === globalPage &&
+      globalDirectory.companies.length < 500
+    ) {
+      return globalDirectory.totalCompanies;
+    }
     if (filterFacets) return filterFacets.totalMatchedCompanies;
     if (globalDirectory) return globalDirectory.totalCompanies;
     if (filterExplorerResult) return filterExplorerResult.totalMatchedCompanies;
     return 0;
-  }, [filterFacets, globalDirectory, filterExplorerResult]);
+  }, [
+    filters.companyNameFilter,
+    filters.locationQuery,
+    filters.industryKeyword,
+    filterFacets,
+    globalDirectory,
+    globalDirectoryLoading,
+    globalPage,
+    filterExplorerResult,
+  ]);
 
   const coherentFilterContactsTotal = useMemo(() => {
+    if (
+      filterExplorerResult &&
+      !isFilterLoading &&
+      filterExplorerResult.page === globalPage &&
+      filterExplorerResult.employees.length < 500
+    ) {
+      return filterExplorerResult.totalMatchedContacts;
+    }
     if (filterFacets) return filterFacets.totalMatchedContacts;
     return activeTotalMatchedContacts;
-  }, [filterFacets, activeTotalMatchedContacts]);
+  }, [
+    filterExplorerResult,
+    isFilterLoading,
+    globalPage,
+    filterFacets,
+    activeTotalMatchedContacts,
+  ]);
 
   const hasCoherentFilterTotals = Boolean(
     filterFacets || globalDirectory || filterExplorerResult
@@ -1696,7 +1883,7 @@ export default function App() {
 
   // Auto-dismiss the white translucent OrgLens dismantling logo overlay once workspace data finishes loading
   useEffect(() => {
-    if (!postLoginOverlayVisible) return;
+    if (!postLoginOverlayVisible || authSubmittingOverlay) return;
 
     // Hard safety cap so slow networks never trap the user on the overlay
     const maxCapTimer = window.setTimeout(() => {
@@ -1723,6 +1910,7 @@ export default function App() {
     };
   }, [
     postLoginOverlayVisible,
+    authSubmittingOverlay,
     globalDirectory,
     globalDirectoryLoading,
     appView,
@@ -1769,54 +1957,78 @@ export default function App() {
     );
   }
 
-  // 2. Unauthenticated Landing + B2B Login / Sign Up View
+  // 2. Unauthenticated Landing + B2B Login / Sign Up View OR Authenticated Workspace
+  // Mount OrgLensLogoLoaderOverlay at the same tree level so submitting login immediately displays
+  // the dismantling/rearranging favicon overlay and transitions into the workspace with zero flicker.
+  const isLoginOverlayActive = authSubmittingOverlay || postLoginOverlayVisible;
+
   if (!user) {
     return (
-      <B2BLandingAuthPage
-        authMode={authMode}
-        onChangeAuthMode={setAuthMode}
-        config={publicConfig}
-        theme={theme}
-        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-        sessionDisplacedNotice={sessionDisplacedNotice}
-        onDismissSessionNotice={clearSessionDisplacedNotice}
-        onLogin={async (identifier, password) => {
-          const loggedIn = await login(identifier, password);
-          postLoginStartedAtRef.current = Date.now();
-          setPostLoginOverlayVisible(true);
-          setAppView('workspace');
-          if (loggedIn.preferences?.defaultSessionMode === 'filter') {
-            setSessionMode('filter');
-            setActiveTab('industry');
-          } else {
-            setSessionMode('domain');
-            setActiveTab('full-names-emails');
-          }
-          return loggedIn;
-        }}
-        onSignup={async (input) => {
-          const created = await signup(input);
-          postLoginStartedAtRef.current = Date.now();
-          setPostLoginOverlayVisible(true);
-          setAppView('workspace');
-          setSessionMode('domain');
-          setActiveTab('full-names-emails');
-          setStatusBanner({
-            tone: 'success',
-            text: `Welcome to OrgLens, ${created.fullName}! ${created.lensCoins} free Lens Coins have been credited to your account.`,
-          });
-          return created;
-        }}
-      />
+      <>
+        <OrgLensLogoLoaderOverlay visible={isLoginOverlayActive} />
+        <B2BLandingAuthPage
+          authMode={authMode}
+          onChangeAuthMode={setAuthMode}
+          config={publicConfig}
+          theme={theme}
+          onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+          sessionDisplacedNotice={sessionDisplacedNotice}
+          onDismissSessionNotice={clearSessionDisplacedNotice}
+          onLogin={async (identifier, password) => {
+            postLoginStartedAtRef.current = Date.now();
+            setAuthSubmittingOverlay(true);
+            try {
+              const loggedIn = await login(identifier, password);
+              setPostLoginOverlayVisible(true);
+              setAuthSubmittingOverlay(false);
+              setAppView('workspace');
+              if (loggedIn.preferences?.defaultSessionMode === 'filter') {
+                setSessionMode('filter');
+                setActiveTab('industry');
+              } else {
+                setSessionMode('domain');
+                setActiveTab('full-names-emails');
+              }
+              return loggedIn;
+            } catch (err) {
+              setAuthSubmittingOverlay(false);
+              setPostLoginOverlayVisible(false);
+              throw err;
+            }
+          }}
+          onSignup={async (input) => {
+            postLoginStartedAtRef.current = Date.now();
+            setAuthSubmittingOverlay(true);
+            try {
+              const created = await signup(input);
+              setPostLoginOverlayVisible(true);
+              setAuthSubmittingOverlay(false);
+              setAppView('workspace');
+              setSessionMode('domain');
+              setActiveTab('full-names-emails');
+              setStatusBanner({
+                tone: 'success',
+                text: `Welcome to OrgLens, ${created.fullName}! ${created.lensCoins} free Lens Coins have been credited to your account.`,
+              });
+              return created;
+            } catch (err) {
+              setAuthSubmittingOverlay(false);
+              setPostLoginOverlayVisible(false);
+              throw err;
+            }
+          }}
+        />
+      </>
     );
   }
 
   // 3. Authenticated Views: /upgrade (USDT TRC20 Billing) OR Directory Workspace
   return (
-    <div className="min-h-screen relative overflow-x-clip bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 transition-colors duration-200">
-      <OrgLensLogoLoaderOverlay visible={postLoginOverlayVisible} />
-      <div
-        aria-hidden="true"
+    <>
+      <OrgLensLogoLoaderOverlay visible={isLoginOverlayActive} />
+      <div className="min-h-screen relative overflow-x-clip bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 transition-colors duration-200">
+        <div
+          aria-hidden="true"
         className="pointer-events-none fixed inset-0 overflow-hidden z-0"
       >
         <div className="absolute -top-40 left-1/2 -translate-x-1/2 h-[460px] w-[880px] rounded-full bg-sky-500/12 dark:bg-sky-500/10 blur-3xl" />
@@ -2070,6 +2282,8 @@ export default function App() {
                   handleNavigateGlobalPage(pg);
                   setContactsPage(1);
                 }}
+                isPageCached={isExplorerPageCached}
+                onPrefetchPage={prefetchExplorerPage}
                 contactsPage={contactsPage}
                 onChangeContactsPage={setContactsPage}
                 urlLocalQuery={localSearchQuery}
@@ -2122,6 +2336,8 @@ export default function App() {
                   handleNavigateGlobalPage(pg);
                   setRolesPage(1);
                 }}
+                isPageCached={isExplorerPageCached}
+                onPrefetchPage={prefetchExplorerPage}
                 rolesPage={rolesPage}
                 onChangeRolesPage={setRolesPage}
                 urlRoleQuery={localSearchQuery}
@@ -2152,6 +2368,8 @@ export default function App() {
                 coherentTotalCompanies={coherentFilterOrgsTotal}
                 globalPage={globalPage}
                 onChangeGlobalPage={handleNavigateGlobalPage}
+                isPageCached={isCompaniesPageCached}
+                onPrefetchPage={prefetchCompaniesPage}
                 onSelectIndustrySlug={(slug) => {
                   setFilters((prev) => ({
                     ...prev,
@@ -2341,6 +2559,7 @@ export default function App() {
         onCancel={() => setSignOutConfirmOpen(false)}
         onConfirm={confirmSignOutNow}
       />
-    </div>
+      </div>
+    </>
   );
 }

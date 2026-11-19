@@ -822,49 +822,26 @@ export function getConfirmedContactsForDomains(
 export interface VaultCompanyQuery {
   companyQuery?: string;
   countrySlugs?: string[];
+  nullCountryOnly?: boolean;
+  excludeCountrySlugs?: string[];
   locationQuery?: string;
   industryTokens?: string[];
+  industryTlds?: string[];
   industryKeyword?: string;
   employeeRanges?: string[];
   revenueRanges?: string[];
   requireRealDomain?: boolean;
   page: number;
   perPage: number;
+  extraBuffer?: number;
+  offsetOverride?: number;
 }
 
-export function queryVaultCompanies(q: VaultCompanyQuery): {
-  companies: GlobalCompanyItem[];
-  totalMatchingInVault: number;
-} {
-  const requireDomain = q.requireRealDomain !== false;
-  const cacheKey = JSON.stringify([
-    q.companyQuery?.trim().toLowerCase() || '',
-    q.countrySlugs || [],
-    q.locationQuery?.trim().toLowerCase() || '',
-    q.industryTokens || [],
-    q.industryKeyword?.trim().toLowerCase() || '',
-    q.employeeRanges || [],
-    q.revenueRanges || [],
-    requireDomain,
-    q.page,
-    q.perPage,
-  ]);
-  const ramHit = vaultQueryRamCache.get(cacheKey);
-  if (ramHit && ramHit.expiresAt > Date.now()) {
-    return {
-      companies: ramHit.companies,
-      totalMatchingInVault: ramHit.totalMatchingInVault,
-    };
-  }
-
-  const db = getDb();
-  const where: string[] = [];
-  const params: Array<string | number> = [];
-
-  if (requireDomain) {
-    where.push("domain IS NOT NULL AND domain != ''");
-  }
-
+function appendVaultFilterClauses(
+  q: Omit<VaultCompanyQuery, 'page' | 'perPage'>,
+  where: string[],
+  params: Array<string | number>
+): { cleanCompanyQuery: string; hasFreeTextFilter: boolean } {
   const cleanCompanyQuery = q.companyQuery?.trim().toLowerCase() || '';
   if (cleanCompanyQuery) {
     const term = `%${cleanCompanyQuery}%`;
@@ -872,10 +849,17 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
     params.push(term, term);
   }
 
-  if (q.countrySlugs && q.countrySlugs.length > 0) {
+  if (q.nullCountryOnly) {
+    where.push("(country_slug IS NULL OR country_slug = '')");
+  } else if (q.countrySlugs && q.countrySlugs.length > 0) {
     const slice = q.countrySlugs.slice(0, 80);
     const ph = slice.map(() => '?').join(',');
     where.push(`country_slug IN (${ph})`);
+    params.push(...slice);
+  } else if (q.excludeCountrySlugs && q.excludeCountrySlugs.length > 0) {
+    const slice = q.excludeCountrySlugs.slice(0, 80);
+    const ph = slice.map(() => '?').join(',');
+    where.push(`country_slug IS NOT NULL AND country_slug != '' AND country_slug NOT IN (${ph})`);
     params.push(...slice);
   }
 
@@ -888,12 +872,24 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
     const kw = `%${q.industryKeyword.trim().toLowerCase()}%`;
     where.push('(industry_lower LIKE ? OR name_lower LIKE ?)');
     params.push(kw, kw);
-  } else if (q.industryTokens && q.industryTokens.length > 0) {
-    const toks = q.industryTokens.slice(0, 8);
-    const sub = toks.map(() => 'industry_lower LIKE ?').join(' OR ');
-    where.push(`(${sub})`);
+  } else if (
+    (q.industryTokens && q.industryTokens.length > 0) ||
+    (q.industryTlds && q.industryTlds.length > 0)
+  ) {
+    const subClauses: string[] = [];
+    const tlds = (q.industryTlds || []).slice(0, 3);
+    for (const tld of tlds) {
+      subClauses.push('domain LIKE ?');
+      params.push(`%${tld.toLowerCase()}`);
+    }
+    const toks = (q.industryTokens || []).slice(0, 6);
     for (const t of toks) {
-      params.push(`%${t.toLowerCase()}%`);
+      subClauses.push('(industry_lower LIKE ? OR name_lower LIKE ?)');
+      const pat = `%${t.toLowerCase()}%`;
+      params.push(pat, pat);
+    }
+    if (subClauses.length > 0) {
+      where.push(`(${subClauses.join(' OR ')})`);
     }
   }
 
@@ -909,26 +905,75 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
     params.push(...q.revenueRanges);
   }
 
-  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-  const offset = Math.max(0, (q.page - 1) * q.perPage);
   const hasFreeTextFilter = Boolean(
     cleanCompanyQuery ||
       (q.locationQuery && q.locationQuery.trim()) ||
       (q.industryKeyword && q.industryKeyword.trim()) ||
-      (q.industryTokens && q.industryTokens.length > 0)
+      (q.industryTokens && q.industryTokens.length > 0) ||
+      (q.industryTlds && q.industryTlds.length > 0)
   );
 
-  // Use indexed fast sort for non-free-text queries; for free-text LIKE scans, avoid scanning
-  // all 881k rows into a temp B-tree by fetching bounded candidates fast and ranking in JS (< 2ms).
-  const candidateLimit =
-    hasFreeTextFilter && q.page === 1
-      ? Math.max(q.perPage, 750)
-      : q.perPage;
-  const orderClause = hasFreeTextFilter
-    ? ''
-    : 'ORDER BY confirmed_email_count DESC, updated_at DESC';
+  return { cleanCompanyQuery, hasFreeTextFilter };
+}
 
-  const rows = db
+export function queryVaultCompanies(q: VaultCompanyQuery): {
+  companies: GlobalCompanyItem[];
+  totalMatchingInVault: number;
+} {
+  const requireDomain = q.requireRealDomain !== false;
+  const cacheKey = JSON.stringify([
+    q.companyQuery?.trim().toLowerCase() || '',
+    q.countrySlugs || [],
+    Boolean(q.nullCountryOnly),
+    q.excludeCountrySlugs || [],
+    q.locationQuery?.trim().toLowerCase() || '',
+    q.industryTokens || [],
+    q.industryTlds || [],
+    q.industryKeyword?.trim().toLowerCase() || '',
+    q.employeeRanges || [],
+    q.revenueRanges || [],
+    requireDomain,
+    q.page,
+    q.perPage,
+    q.extraBuffer || 0,
+    q.offsetOverride ?? -1,
+  ]);
+  const ramHit = vaultQueryRamCache.get(cacheKey);
+  if (ramHit && ramHit.expiresAt > Date.now()) {
+    return {
+      companies: ramHit.companies,
+      totalMatchingInVault: ramHit.totalMatchingInVault,
+    };
+  }
+
+  const db = getDb();
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+
+  if (requireDomain) {
+    where.push("domain IS NOT NULL AND domain != '' AND domain LIKE '%.%'");
+  }
+
+  const { cleanCompanyQuery, hasFreeTextFilter } = appendVaultFilterClauses(
+    q,
+    where,
+    params
+  );
+
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const offset =
+    typeof q.offsetOverride === 'number'
+      ? Math.max(0, q.offsetOverride)
+      : Math.max(0, (q.page - 1) * q.perPage);
+
+  // Over-fetch (+250 buffer) so suspect/duplicate-domain rows filtered out never leave pages short of 500.
+  // Use indexed sort for non-free-text queries and deterministic rowid order for free-text scans so pages never duplicate.
+  const candidateLimit = q.perPage + 250;
+  const orderClause = hasFreeTextFilter
+    ? 'ORDER BY rowid ASC'
+    : 'ORDER BY confirmed_email_count DESC, updated_at DESC, rowid ASC';
+
+  const rawRows = db
     .prepare(
       `SELECT slug, name, domain, website_url, logo_url, location, country_slug,
               industry, employee_range, revenue_range, source_registry,
@@ -954,6 +999,30 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
     confirmed_email_count: number;
   }>;
 
+  const seenDomains = new Set<string>();
+  const validRows = rawRows.filter((r) => {
+    if (requireDomain) {
+      if (!r.domain || !isValidDomain(r.domain)) return false;
+      if (isSuspectDomainQuickCheck(r.domain, r.slug, r.source_registry)) {
+        return false;
+      }
+    }
+    const cleanDom = r.domain ? normalizeDomain(r.domain) : '';
+    if (cleanDom) {
+      if (seenDomains.has(cleanDom)) return false;
+      seenDomains.add(cleanDom);
+    }
+    return true;
+  });
+
+  // Slice primary page [0..perPage) separately from extraBuffer overflow BEFORE sorting
+  // so sorting never pulls rows from [500..560) onto Page 1 and duplicates them on Page 2!
+  const primaryRows = validRows.slice(0, q.perPage);
+  const overflowRows = validRows.slice(
+    q.perPage,
+    q.perPage + Math.max(0, q.extraBuffer || 0)
+  );
+
   const empRank: Record<string, number> = {
     '10,000+': 7,
     '5,001 - 10,000': 6,
@@ -975,7 +1044,7 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
   };
   const cleanDomainRoot = cleanCompanyQuery.replace(/^www\./, '');
 
-  rows.sort((a, b) => {
+  primaryRows.sort((a, b) => {
     if (cleanCompanyQuery) {
       const aName = a.name.toLowerCase();
       const bName = b.name.toLowerCase();
@@ -1014,22 +1083,14 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
     return a.name.localeCompare(b.name);
   });
 
-  const slicedRows = rows.slice(0, q.perPage);
+  const pageRows = [...primaryRows, ...overflowRows];
 
-  let totalMatchingInVault = 0;
-  if (q.page === 1 && slicedRows.length < q.perPage) {
-    totalMatchingInVault = slicedRows.length;
-  } else if (!hasFreeTextFilter) {
-    // Avoid slow 881k COUNT(*) scan; exact totals are provided by cached group breakdowns & facets
-    totalMatchingInVault = offset + slicedRows.length;
-  } else {
-    totalMatchingInVault =
-      rows.length > q.perPage
-        ? offset + rows.length
-        : offset + slicedRows.length;
-  }
+  const hasMoreAfterPage = validRows.length > q.perPage;
+  const totalMatchingInVault = hasMoreAfterPage
+    ? offset + validRows.length
+    : offset + pageRows.length;
 
-  const companies: GlobalCompanyItem[] = slicedRows.map((r) => ({
+  const companies: GlobalCompanyItem[] = pageRows.map((r) => ({
     id: r.registry_id || r.slug,
     slug: r.slug,
     name: r.name,
@@ -1047,17 +1108,156 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
       r.confirmed_email_count > 0 ? r.confirmed_email_count : undefined,
   }));
 
-  if (vaultQueryRamCache.size > 300) {
-    const firstKey = vaultQueryRamCache.keys().next().value;
-    if (firstKey) vaultQueryRamCache.delete(firstKey);
+  if (companies.length > 0) {
+    if (vaultQueryRamCache.size > 300) {
+      const firstKey = vaultQueryRamCache.keys().next().value;
+      if (firstKey) vaultQueryRamCache.delete(firstKey);
+    }
+    vaultQueryRamCache.set(cacheKey, {
+      companies,
+      totalMatchingInVault,
+      expiresAt: Date.now() + 300_000,
+    });
   }
-  vaultQueryRamCache.set(cacheKey, {
-    companies,
-    totalMatchingInVault,
-    expiresAt: Date.now() + 300_000,
-  });
 
   return { companies, totalMatchingInVault };
+}
+
+const vaultCountRamCache = new Map<
+  string,
+  { count: number; expiresAt: number }
+>();
+
+/**
+ * Bounded fast count (up to 25,000 matches) for accurate search & filter pagination totals.
+ */
+export function countVaultCompaniesFast(
+  q: Omit<VaultCompanyQuery, 'page' | 'perPage'>,
+  cap = 25_000
+): number {
+  const requireDomain = q.requireRealDomain !== false;
+  const cacheKey = JSON.stringify([
+    q.companyQuery?.trim().toLowerCase() || '',
+    q.countrySlugs || [],
+    Boolean(q.nullCountryOnly),
+    q.excludeCountrySlugs || [],
+    q.locationQuery?.trim().toLowerCase() || '',
+    q.industryTokens || [],
+    q.industryTlds || [],
+    q.industryKeyword?.trim().toLowerCase() || '',
+    q.employeeRanges || [],
+    q.revenueRanges || [],
+    requireDomain,
+    cap,
+  ]);
+  const hit = vaultCountRamCache.get(cacheKey);
+  if (hit && hit.expiresAt > Date.now()) {
+    return hit.count;
+  }
+
+  const db = getDb();
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+
+  if (requireDomain) {
+    where.push("domain IS NOT NULL AND domain != '' AND domain LIKE '%.%'");
+  }
+  appendVaultFilterClauses(q, where, params);
+
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS cnt FROM (SELECT 1 FROM companies ${whereSql} LIMIT ?)`
+    )
+    .get(...params, cap) as { cnt: number } | undefined;
+
+  const count = Number(row?.cnt || 0);
+  if (vaultCountRamCache.size > 300) {
+    const oldest = vaultCountRamCache.keys().next().value;
+    if (oldest) vaultCountRamCache.delete(oldest);
+  }
+  vaultCountRamCache.set(cacheKey, { count, expiresAt: Date.now() + 300_000 });
+  return count;
+}
+
+/**
+ * Returns companies matching the active filters that have real org charts,
+ * confirmed web contacts, cached rosters, or corporate registry officers so
+ * Full Names & Emails / Command Hierarchy pagination (Page 1, 2, 3...) never goes empty.
+ */
+export function queryVaultRosterCapableCompanies(
+  q: VaultCompanyQuery
+): GlobalCompanyItem[] {
+  const db = getDb();
+  const where: string[] = [
+    "domain IS NOT NULL AND domain != '' AND domain LIKE '%.%'",
+    "(source_registry IN ('TheOrg Directory', 'Live Domain Discovery') OR confirmed_email_count > 0 OR slug IN (SELECT slug FROM quick_roster_cache_db) OR slug IN (SELECT company_slug FROM company_officers))",
+  ];
+  const params: Array<string | number> = [];
+
+  appendVaultFilterClauses(q, where, params);
+
+  const offset =
+    typeof q.offsetOverride === 'number'
+      ? Math.max(0, q.offsetOverride)
+      : Math.max(0, (q.page - 1) * q.perPage);
+  const fetchLimit = q.perPage + 40;
+  const rows = db
+    .prepare(
+      `SELECT slug, name, domain, website_url, logo_url, location, country_slug,
+              industry, employee_range, revenue_range, source_registry,
+              registry_id, confirmed_email_count
+       FROM companies
+       WHERE ${where.join(' AND ')}
+       ORDER BY
+         CASE WHEN slug IN (SELECT slug FROM quick_roster_cache_db) THEN 1 ELSE 0 END DESC,
+         confirmed_email_count DESC,
+         updated_at DESC,
+         rowid ASC
+       LIMIT ? OFFSET ?`
+    )
+    .all(...params, fetchLimit, offset) as Array<{
+    slug: string;
+    name: string;
+    domain: string | null;
+    website_url: string | null;
+    logo_url: string | null;
+    location: string;
+    country_slug: string | null;
+    industry: string;
+    employee_range: string;
+    revenue_range: string;
+    source_registry: string;
+    registry_id: string | null;
+    confirmed_email_count: number;
+  }>;
+
+  const seenDom = new Set<string>();
+  const out: GlobalCompanyItem[] = [];
+  for (const r of rows) {
+    if (!r.domain || !isValidDomain(r.domain)) continue;
+    const cleanDom = normalizeDomain(r.domain);
+    if (!cleanDom || seenDom.has(cleanDom)) continue;
+    seenDom.add(cleanDom);
+    out.push({
+      id: r.registry_id || r.slug,
+      slug: r.slug,
+      name: r.name,
+      domain: cleanDom,
+      websiteUrl: r.website_url || `https://${cleanDom}`,
+      logoUrl: r.logo_url,
+      location: r.location,
+      industry: r.industry,
+      employeeRange: r.employee_range,
+      revenueRange: r.revenue_range,
+      sourceCountrySlug: r.country_slug || undefined,
+      sourceRegistry: r.source_registry,
+      confirmedEmailCount:
+        r.confirmed_email_count > 0 ? r.confirmed_email_count : undefined,
+    });
+    if (out.length >= q.perPage) break;
+  }
+  return out;
 }
 
 /**

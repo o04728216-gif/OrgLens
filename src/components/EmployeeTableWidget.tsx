@@ -59,6 +59,8 @@ interface EmployeeTableWidgetProps {
   }) => void;
   globalPage?: number;
   onChangeGlobalPage?: (page: number) => void;
+  isPageCached?: (page: number) => boolean;
+  onPrefetchPage?: (page: number) => void;
   contactsPage?: number;
   onChangeContactsPage?: (page: number) => void;
   urlLocalQuery?: string;
@@ -150,6 +152,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   onSelectCompanyFromFilterContact,
   globalPage = 1,
   onChangeGlobalPage,
+  isPageCached,
+  onPrefetchPage,
   contactsPage,
   onChangeContactsPage,
   urlLocalQuery,
@@ -351,9 +355,20 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         return true;
       });
 
+    const hasClientNarrowing = Boolean(
+      qLocal ||
+        qContact ||
+        qRole ||
+        filters.seniorities.length > 0 ||
+        filters.departments.length > 0 ||
+        filters.minAccuracy > 0 ||
+        filters.maxAccuracy < 100
+    );
+
     return rows.map((row, index) => ({
       ...row,
-      displayRank: index + 1,
+      displayRank:
+        !hasClientNarrowing && row.rank > 0 ? row.rank : index + 1,
     }));
   }, [
     sessionMode,
@@ -451,7 +466,11 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       scrollToListTop(listTopRef.current);
     }
     if (bounded === globalPage && !isServerBatchLoading) return;
-    setRequestedServerPage(bounded);
+    if (isPageCached?.(bounded)) {
+      setRequestedServerPage(null);
+    } else {
+      setRequestedServerPage(bounded);
+    }
     updateCurrentPage(1);
     onChangeGlobalPage(bounded);
   };
@@ -470,13 +489,10 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     if (bounded === safePage) return;
     if (localPageTimerRef.current !== null) {
       window.clearTimeout(localPageTimerRef.current);
-    }
-    setLocalPageLoadingTarget(bounded);
-    localPageTimerRef.current = window.setTimeout(() => {
-      updateCurrentPage(bounded);
-      setLocalPageLoadingTarget(null);
       localPageTimerRef.current = null;
-    }, 170);
+    }
+    setLocalPageLoadingTarget(null);
+    updateCurrentPage(bounded);
   };
 
   const effectiveMatchedCompanies =
@@ -958,21 +974,31 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                 <button
                   type="button"
                   disabled={activeCompanyBatch <= 1 || isServerBatchLoading}
+                  onMouseEnter={() => {
+                    if (activeCompanyBatch > 1) {
+                      onPrefetchPage?.(activeCompanyBatch - 1);
+                    }
+                  }}
+                  onTouchStart={() => {
+                    if (activeCompanyBatch > 1) {
+                      onPrefetchPage?.(activeCompanyBatch - 1);
+                    }
+                  }}
                   onClick={() =>
                     handleSelectCompanyBatch(activeCompanyBatch - 1)
                   }
-                  title="Load previous 500-company batch on demand"
+                  title="Load previous 500-contact page"
                   className="min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
-                  Prev Batch
+                  Prev Page
                 </button>
                 <span className="px-2 text-xs font-mono tabular-nums font-semibold text-sky-700 dark:text-sky-400 whitespace-nowrap inline-flex items-center gap-1.5">
                   {isServerBatchLoading && (
                     <Loader2 className="h-3 w-3 animate-spin shrink-0" />
                   )}
                   <span>
-                    Batch {activeCompanyBatch.toLocaleString()} /{' '}
+                    Page {activeCompanyBatch.toLocaleString()} /{' '}
                     {totalCompanyBatches.toLocaleString()}
                   </span>
                 </span>
@@ -982,13 +1008,23 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                     activeCompanyBatch >= totalCompanyBatches ||
                     isServerBatchLoading
                   }
+                  onMouseEnter={() => {
+                    if (activeCompanyBatch < totalCompanyBatches) {
+                      onPrefetchPage?.(activeCompanyBatch + 1);
+                    }
+                  }}
+                  onTouchStart={() => {
+                    if (activeCompanyBatch < totalCompanyBatches) {
+                      onPrefetchPage?.(activeCompanyBatch + 1);
+                    }
+                  }}
                   onClick={() =>
                     handleSelectCompanyBatch(activeCompanyBatch + 1)
                   }
-                  title="Load next 500-company batch on demand"
+                  title="Load next 500-contact page"
                   className="min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none transition-colors cursor-pointer whitespace-nowrap"
                 >
-                  Next Batch
+                  Next Page
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -1054,7 +1090,13 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         </span>
         <span className="font-mono tabular-nums whitespace-nowrap">
           {filteredEmployees.length === 0
-            ? 'Showing 0 contacts'
+            ? isFilterLoading || isServerBatchLoading
+              ? `Loading page ${targetPaginationPage.toLocaleString()} (500/page)...`
+              : 'Showing 0 contacts'
+            : useServerBatchPagination && displayedEmployees.length > 0
+            ? `Showing #${displayedEmployees[0].displayRank.toLocaleString()}–#${displayedEmployees[
+                displayedEmployees.length - 1
+              ].displayRank.toLocaleString()} (${displayedEmployees.length.toLocaleString()} on page ${safePage.toLocaleString()} · 500/page)`
             : `Showing ${(pageStartIndex + 1).toLocaleString()}–${(
                 pageStartIndex + displayedEmployees.length
               ).toLocaleString()} of ${filteredEmployees.length.toLocaleString()} contacts (500/page)`}
@@ -1062,7 +1104,14 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       </div>
 
       {/* Contacts View: Mobile Cards (< md) + Desktop HTML <table> (md+) */}
-      {filteredEmployees.length === 0 ? (
+      {filteredEmployees.length === 0 && (isFilterLoading || isServerBatchLoading) ? (
+        <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80">
+          <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
+          <span>
+            Loading page {targetPaginationPage.toLocaleString()} contacts (500/page)...
+          </span>
+        </div>
+      ) : filteredEmployees.length === 0 ? (
         <div className="py-10 px-4 text-center rounded-xl border border-slate-200/80 dark:border-slate-800/80">
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
             {confirmedOnly
@@ -1071,6 +1120,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               ? localQuery
                 ? 'No contacts in this company match your quick search.'
                 : 'No publicly indexed employee records were found for this organization.'
+              : globalPage > 1
+              ? `No additional indexed contacts were found on page ${globalPage.toLocaleString()} for this filter.`
               : 'No contacts matched this exact combination of sidebar filters.'}
           </p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -1080,8 +1131,32 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               ? localQuery
                 ? 'Clear the quick search input above to view the full organization roster.'
                 : 'Return to Companies List to select another organization.'
+              : globalPage > 1
+              ? 'Return to an earlier page or broaden your sidebar filters to load more verified contacts.'
               : 'Broaden your Accuracy Score, Role, Location, or Revenue selection in the left sidebar.'}
           </p>
+          {sessionMode === 'filter' &&
+            !isViewingFilterCompany &&
+            !confirmedOnly &&
+            globalPage > 1 &&
+            onChangeGlobalPage && (
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSelectCompanyBatch(globalPage - 1)}
+                  className="min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Previous Page ({(globalPage - 1).toLocaleString()})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectCompanyBatch(1)}
+                  className="min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+                >
+                  Return to Page 1
+                </button>
+              </div>
+            )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -1392,11 +1467,10 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         totalPages={totalPages}
         isLoading={isPaginationLoading}
         targetPage={targetPaginationPage}
-        perPageLabel={
-          useServerBatchPagination ? '500 orgs/batch' : '500/page'
-        }
+        perPageLabel="500/page"
         loadingLabel={`Loading page ${targetPaginationPage.toLocaleString()}...`}
         onSelectPage={handleSelectContactsPage}
+        onPrefetchPage={useServerBatchPagination ? onPrefetchPage : undefined}
       />
     </div>
   );

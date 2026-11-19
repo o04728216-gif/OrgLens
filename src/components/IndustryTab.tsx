@@ -50,6 +50,8 @@ interface IndustryTabProps {
   coherentTotalCompanies: number;
   globalPage: number;
   onChangeGlobalPage: (page: number) => void;
+  isPageCached?: (page: number) => boolean;
+  onPrefetchPage?: (page: number) => void;
   onSelectIndustrySlug: (slug: string | null) => void;
   onSelectGlobalCompany: (company: GlobalCompanyItem) => void;
   onPrefetchCompany?: (company: GlobalCompanyItem) => void;
@@ -145,6 +147,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   coherentTotalCompanies,
   globalPage,
   onChangeGlobalPage,
+  isPageCached,
+  onPrefetchPage,
   onSelectIndustrySlug,
   onSelectGlobalCompany,
   onPrefetchCompany,
@@ -218,8 +222,12 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
       Boolean(comp.domain && comp.domain.includes('.'))
     );
 
-    // Apply immediate client-side narrowing while the fresh SQLite 500/page payload streams in
-    if (globalDirectoryLoading) {
+    // Apply immediate client-side narrowing ONLY on filter changes (never during pagination turns!)
+    const isPagingNow =
+      requestedPage !== null ||
+      (globalDirectoryLoading && activeDirectorySource.page !== globalPage);
+
+    if (globalDirectoryLoading && !isPagingNow) {
       const nameQ = filters.companyNameFilter.trim().toLowerCase();
       const indQ = filters.industryKeyword.trim().toLowerCase();
       const locQ = filters.locationQuery.trim();
@@ -293,6 +301,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   }, [
     activeDirectorySource,
     globalDirectoryLoading,
+    requestedPage,
+    globalPage,
     sortBy,
     filters.companyNameFilter,
     filters.industryKeyword,
@@ -342,13 +352,27 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
     effectiveTotalCompanies,
   ]);
 
+  const hasFreeTextSearch = Boolean(
+    filters.companyNameFilter.trim() ||
+      filters.locationQuery.trim() ||
+      filters.industryKeyword.trim()
+  );
+
   const coherentTotalPages = useMemo(() => {
+    if (
+      activeDirectorySource &&
+      (hasFreeTextSearch ||
+        (activeDirectorySource.page === globalPage &&
+          activeDirectorySource.companies.length < 500))
+    ) {
+      return Math.max(1, activeDirectorySource.totalPages || 1);
+    }
     if (effectiveTotalCompanies === 0) return 1;
     return Math.max(
       1,
       Math.min(20000, Math.ceil(effectiveTotalCompanies / 500))
     );
-  }, [effectiveTotalCompanies]);
+  }, [hasFreeTextSearch, activeDirectorySource, globalPage, effectiveTotalCompanies]);
 
   const topIndustriesQuickBar = useMemo(
     () => globalIndustries.slice(0, 8),
@@ -373,7 +397,12 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
       scrollToListTop(listTopRef.current);
       return;
     }
-    setRequestedPage(bounded);
+    // Instant 0ms swap for already-fetched/prefetched pages — zero loading dim or spinner!
+    if (isPageCached?.(bounded)) {
+      setRequestedPage(null);
+    } else {
+      setRequestedPage(bounded);
+    }
     scrollToListTop(listTopRef.current);
     onChangeGlobalPage(bounded);
   };
@@ -592,19 +621,46 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
       )}
 
       {/* Worldwide Companies: Mobile Touch Cards (md:hidden) + Desktop HTML <table> (hidden md:block) */}
-      {isDirectoryBusy ? (
+      {isDirectoryBusy ||
+      (globalDirectoryLoading && filteredGlobalCompanies.length === 0) ? (
         <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80">
           <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
-          <span>Loading matching worldwide companies...</span>
+          <span>
+            {isPaginationLoading
+              ? `Loading page ${targetPaginationPage.toLocaleString()} (500 companies/page)...`
+              : 'Loading matching worldwide companies...'}
+          </span>
         </div>
       ) : filteredGlobalCompanies.length === 0 ? (
         <div className="py-10 px-4 text-center rounded-xl border border-slate-200/80 dark:border-slate-800/80">
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-            No companies matched this exact combination of Continent, Country, Industry, or Revenue filters.
+            {globalPage > 1
+              ? `No additional companies were found on page ${globalPage.toLocaleString()} for this filter.`
+              : 'No companies matched this exact combination of Continent, Country, Industry, or Revenue filters.'}
           </p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            Adjust your sidebar location, headcount, or revenue selections to broaden the directory.
+            {globalPage > 1
+              ? 'Return to an earlier page or broaden your sidebar filters to inspect more organizations.'
+              : 'Adjust your sidebar location, headcount, or revenue selections to broaden the directory.'}
           </p>
+          {globalPage > 1 && (
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleSelectPage(globalPage - 1)}
+                className="min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+              >
+                Previous Page ({(globalPage - 1).toLocaleString()})
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectPage(1)}
+                className="min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+              >
+                Return to Page 1
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -1000,6 +1056,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
           perPageLabel="500/page"
           loadingLabel={`Loading page ${targetPaginationPage.toLocaleString()}...`}
           onSelectPage={handleSelectPage}
+          onPrefetchPage={onPrefetchPage}
         />
       )}
 
