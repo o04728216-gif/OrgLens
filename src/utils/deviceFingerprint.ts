@@ -1,4 +1,5 @@
 import type { DeviceRegistrationPayload } from '../types/platformTypes';
+import { getOrCreateClientDeviceId } from './authClient';
 
 const INSTALL_STORAGE_KEY = 'orglens_hw_install_v2';
 const IDB_NAME = 'orglens_device_vault_v2';
@@ -7,6 +8,38 @@ const CACHE_NAME = 'orglens-device-identity-v2';
 const CACHE_URL = '/__orglens_device_seal__';
 const COOKIE_NAME = 'ol_client_did';
 const WINDOW_NAME_PREFIX = 'OL_DID:';
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T
+): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(fallback);
+      }
+    }, timeoutMs);
+
+    promise
+      .then((val) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(val);
+        }
+      })
+      .catch(() => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fallback);
+        }
+      });
+  });
+}
 
 function generateRandomInstallId(): string {
   const arr = new Uint8Array(16);
@@ -231,21 +264,23 @@ async function writeCacheStorageId(id: string): Promise<void> {
  * storage vaults (localStorage, IndexedDB, CacheStorage, Cookie, window.name).
  */
 async function resolvePersistentDeviceInstallId(): Promise<string> {
+  const fastSyncId =
+    readCookieInstallId() || readLocalStorageId() || readWindowNameId();
+
   const [idbVal, cacheVal] = await Promise.all([
-    readIndexedDbId(),
-    readCacheStorageId(),
+    withTimeout(readIndexedDbId(), 90, null),
+    withTimeout(readCacheStorageId(), 90, null),
   ]);
-  const lsVal = readLocalStorageId();
-  const cookieVal = readCookieInstallId();
-  const winVal = readWindowNameId();
 
   const chosen =
-    idbVal || cacheVal || cookieVal || lsVal || winVal || generateRandomInstallId();
+    fastSyncId || idbVal || cacheVal || getOrCreateClientDeviceId() || generateRandomInstallId();
 
   writeLocalStorageId(chosen);
   writeCookieInstallId(chosen);
   writeWindowNameId(chosen);
-  await Promise.all([writeIndexedDbId(chosen), writeCacheStorageId(chosen)]);
+  // Persist heavy async vaults in background so login/signup UI never hangs
+  void writeIndexedDbId(chosen);
+  void writeCacheStorageId(chosen);
 
   return chosen;
 }
@@ -376,17 +411,7 @@ function cleanGpuShortName(renderer: string): string {
   return extracted.replace(/\s+/g, ' ').trim().slice(0, 42);
 }
 
-/**
- * Collects physical device traits (independent of IP address!) so one physical
- * device can only register a single account even across storage wipes or VPN/IP switches.
- */
-export async function collectDeviceRegistrationPayload(): Promise<DeviceRegistrationPayload> {
-  const [deviceInstallId, audioSig, canvasFontHash] = await Promise.all([
-    resolvePersistentDeviceInstallId(),
-    collectAudioDspSignature(),
-    collectCanvasAndFontSignature(),
-  ]);
-
+function collectFastHardwareMeta() {
   const webgl = collectWebGlHardwareTraits();
   const nav = typeof navigator !== 'undefined' ? navigator : ({} as Navigator);
   const scr = typeof screen !== 'undefined' ? screen : ({} as Screen);
@@ -415,36 +440,100 @@ export async function collectDeviceRegistrationPayload(): Promise<DeviceRegistra
     timezone = 'UTC';
   }
 
-  // Invariant physical hardware composite (identical across normal & incognito tabs on the same machine, completely independent of IP)
-  const hardwareComposite = [
-    `plat:${platform.toLowerCase()}`,
-    `cores:${cpuCores}`,
-    `mem:${memoryGb}`,
-    `touch:${maxTouchPoints}`,
-    `scr:${screenW}x${screenH}:${colorDepth}:${pixelRatio}`,
-    `gpu_v:${webgl.vendor.toLowerCase()}`,
-    `gpu_r:${webgl.renderer.toLowerCase()}`,
-    `gpu_lim:${webgl.limits}`,
-    `aud:${audioSig}`,
-    `tz:${timezone}`,
-  ].join('||');
-
-  const hardwareHash = await sha256Hex(hardwareComposite);
   const shortGpu = cleanGpuShortName(webgl.renderer);
   const deviceLabel = `${platform} · ${shortGpu} · ${screenW}x${screenH}${
     cpuCores ? ` · ${cpuCores} Cores` : ''
   }`;
 
   return {
+    webgl,
+    platform,
+    cpuCores,
+    memoryGb,
+    maxTouchPoints,
+    screenW,
+    screenH,
+    colorDepth,
+    pixelRatio,
+    screenProfile,
+    timezone,
+    shortGpu,
+    deviceLabel,
+  };
+}
+
+/**
+ * Instant (< 5ms) device payload for Sign In: skips slow OfflineAudioContext &
+ * async IndexedDB locks so users log straight into the dashboard immediately.
+ */
+export function collectFastLoginDevicePayload(): DeviceRegistrationPayload {
+  const deviceInstallId = getOrCreateClientDeviceId();
+  writeLocalStorageId(deviceInstallId);
+  writeCookieInstallId(deviceInstallId);
+  writeWindowNameId(deviceInstallId);
+
+  const meta = collectFastHardwareMeta();
+
+  return {
+    deviceInstallId,
+    hardwareHash: '',
+    canvasFontHash: '',
+    deviceLabel: meta.deviceLabel,
+    platform: meta.platform,
+    gpuRenderer: meta.shortGpu,
+    screenProfile: meta.screenProfile,
+    cpuCores: meta.cpuCores,
+    memoryGb: meta.memoryGb,
+    timezone: meta.timezone,
+  };
+}
+
+/**
+ * Collects physical device traits (independent of IP address) with strict 120ms timeout caps
+ * so Sign Up never stalls on browser audio/canvas/storage APIs.
+ */
+export async function collectDeviceRegistrationPayload(): Promise<DeviceRegistrationPayload> {
+  const [deviceInstallId, audioSig, canvasFontHash] = await Promise.all([
+    withTimeout(
+      resolvePersistentDeviceInstallId(),
+      120,
+      getOrCreateClientDeviceId()
+    ),
+    withTimeout(collectAudioDspSignature(), 120, 'audio-fast-skip'),
+    withTimeout(collectCanvasAndFontSignature(), 120, 'canvas-fast-skip'),
+  ]);
+
+  const meta = collectFastHardwareMeta();
+
+  const hardwareComposite = [
+    `plat:${meta.platform.toLowerCase()}`,
+    `cores:${meta.cpuCores}`,
+    `mem:${meta.memoryGb}`,
+    `touch:${meta.maxTouchPoints}`,
+    `scr:${meta.screenW}x${meta.screenH}:${meta.colorDepth}:${meta.pixelRatio}`,
+    `gpu_v:${meta.webgl.vendor.toLowerCase()}`,
+    `gpu_r:${meta.webgl.renderer.toLowerCase()}`,
+    `gpu_lim:${meta.webgl.limits}`,
+    `aud:${audioSig}`,
+    `tz:${meta.timezone}`,
+  ].join('||');
+
+  const hardwareHash = await withTimeout(
+    sha256Hex(hardwareComposite),
+    80,
+    deviceInstallId
+  );
+
+  return {
     deviceInstallId,
     hardwareHash,
     canvasFontHash,
-    deviceLabel,
-    platform,
-    gpuRenderer: shortGpu,
-    screenProfile,
-    cpuCores,
-    memoryGb,
-    timezone,
+    deviceLabel: meta.deviceLabel,
+    platform: meta.platform,
+    gpuRenderer: meta.shortGpu,
+    screenProfile: meta.screenProfile,
+    cpuCores: meta.cpuCores,
+    memoryGb: meta.memoryGb,
+    timezone: meta.timezone,
   };
 }

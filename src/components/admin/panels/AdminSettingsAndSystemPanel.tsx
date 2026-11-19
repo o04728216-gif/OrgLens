@@ -395,9 +395,14 @@ export const AdminSystemPanel: React.FC<AdminSystemPanelProps> = ({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Restore failed.');
       await onRefresh();
+      const s = data?.summary;
       onFeedback(
         'success',
-        'Restored VPS backup while preserving Root Admin indestructibility.'
+        s
+          ? `Restored ${s.restoredMembersCount} signed-up user${
+              s.restoredMembersCount === 1 ? '' : 's'
+            }, Root Admin (${s.restoredAdminEmail}), ${s.restoredPaymentsCount} payments, and ${s.restoredDevicesCount} registered devices.`
+          : 'Restored full VPS snapshot (all users, Root Admin, balances, payments & settings).'
       );
     } catch (err) {
       onFeedback(
@@ -619,6 +624,9 @@ export const AdminSystemPanel: React.FC<AdminSystemPanelProps> = ({
             Active file: <code className="font-mono">{rootAdminShield.storageFilePath}</code>{' '}
             · Automatic .bak recovery:{' '}
             {rootAdminShield.backupFileExists ? 'Ready' : 'Created on next write'}
+          </p>
+          <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+            100% server-IP portable: restoring this JSON on any new server/IP automatically brings back all signed-up users, passwords, coins, unlimited plans, payments, vouchers, devices, and Root Admin credentials.
           </p>
         </div>
 

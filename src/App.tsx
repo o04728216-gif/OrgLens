@@ -66,6 +66,7 @@ import {
 } from './components/layout/HeroDomainSearchSection';
 import { SessionAndTabsBar } from './components/layout/SessionAndTabsBar';
 import { WidgetsDrawerBoard } from './components/layout/WidgetsDrawerBoard';
+import { OrgLensLogoLoaderOverlay } from './components/layout/OrgLensLogoLoaderOverlay';
 import { B2BLandingAuthPage } from './components/landing/B2BLandingAuthPage';
 import { UsdtUpgradePage } from './components/billing/UsdtUpgradePage';
 import { AdminDashboardPage } from './components/admin/AdminDashboardPage';
@@ -172,6 +173,8 @@ export default function App() {
   const [isFilterLoading, setIsFilterLoading] = useState(false);
   // Tracks explicit user clicks on pagination buttons so pagination fetches on demand with a clear loading indicator
   const paginationRequestedPageRef = useRef<number | null>(null);
+  const [postLoginOverlayVisible, setPostLoginOverlayVisible] = useState(false);
+  const postLoginStartedAtRef = useRef<number>(0);
 
   const [filterSelectedCompany, setFilterSelectedCompany] =
     useState<GlobalCompanyItem | null>(initialRoute.filterSelectedCompany);
@@ -1638,6 +1641,7 @@ export default function App() {
   );
 
   const handleLogoutAndReturnLanding = useCallback(async () => {
+    setPostLoginOverlayVisible(false);
     await logout();
     sessionSettledKeysRef.current.clear();
     setSnapshots({});
@@ -1648,6 +1652,41 @@ export default function App() {
     setAppView('landing');
     setAuthMode('login');
   }, [logout]);
+
+  // Auto-dismiss the white translucent OrgLens dismantling logo overlay once workspace data finishes loading
+  useEffect(() => {
+    if (!postLoginOverlayVisible) return;
+
+    // Hard safety cap so slow networks never trap the user on the overlay
+    const maxCapTimer = window.setTimeout(() => {
+      setPostLoginOverlayVisible(false);
+    }, 3400);
+
+    const workspaceLoaded =
+      Boolean(globalDirectory) && !globalDirectoryLoading && !industriesLoading;
+    const elapsed = Date.now() - postLoginStartedAtRef.current;
+
+    let dismissTimer: number | undefined;
+    if (workspaceLoaded || appView !== 'workspace') {
+      const remainingMinCycle = Math.max(0, 950 - elapsed);
+      dismissTimer = window.setTimeout(() => {
+        setPostLoginOverlayVisible(false);
+      }, remainingMinCycle);
+    }
+
+    return () => {
+      window.clearTimeout(maxCapTimer);
+      if (dismissTimer !== undefined) {
+        window.clearTimeout(dismissTimer);
+      }
+    };
+  }, [
+    postLoginOverlayVisible,
+    globalDirectory,
+    globalDirectoryLoading,
+    industriesLoading,
+    appView,
+  ]);
 
   // Initial session validation spinner
   if (authInitializing) {
@@ -1694,6 +1733,8 @@ export default function App() {
         onDismissSessionNotice={clearSessionDisplacedNotice}
         onLogin={async (identifier, password) => {
           const loggedIn = await login(identifier, password);
+          postLoginStartedAtRef.current = Date.now();
+          setPostLoginOverlayVisible(true);
           setAppView('workspace');
           if (loggedIn.preferences?.defaultSessionMode === 'filter') {
             setSessionMode('filter');
@@ -1706,6 +1747,8 @@ export default function App() {
         }}
         onSignup={async (input) => {
           const created = await signup(input);
+          postLoginStartedAtRef.current = Date.now();
+          setPostLoginOverlayVisible(true);
           setAppView('workspace');
           setSessionMode('domain');
           setActiveTab('full-names-emails');
@@ -1722,6 +1765,7 @@ export default function App() {
   // 3. Authenticated Views: /upgrade (USDT TRC20 Billing) OR Directory Workspace
   return (
     <div className="min-h-screen relative overflow-x-clip bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 transition-colors duration-200">
+      <OrgLensLogoLoaderOverlay visible={postLoginOverlayVisible} />
       <div
         aria-hidden="true"
         className="pointer-events-none fixed inset-0 overflow-hidden z-0"

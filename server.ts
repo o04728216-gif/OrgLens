@@ -21,7 +21,7 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 // Immediate zero-dependency readiness endpoints so control-plane health checks succeed in < 80ms
 app.get(['/api/ping', '/health'], (_req: Request, res: Response) => {

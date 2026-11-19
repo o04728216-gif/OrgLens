@@ -17,8 +17,9 @@ import {
   normalizeDomain,
   slugifyName,
 } from '../utils/textAndDomain.ts';
+import { resolveVaultDataDir } from './persistentDataDir.ts';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DATA_DIR = resolveVaultDataDir();
 export const SQLITE_VAULT_PATH = path.join(
   DATA_DIR,
   'worldwide-companies.sqlite'

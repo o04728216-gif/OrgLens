@@ -505,8 +505,8 @@ adminRouter.post(
   '/api/admin/backup/import',
   (req: AuthenticatedRequest, res: Response) => {
     try {
-      importFullVpsBackup(req.body?.backup || req.body);
-      res.json({ ok: true });
+      const summary = importFullVpsBackup(req.body?.backup || req.body);
+      res.json({ ok: true, summary });
     } catch (err) {
       res.status(400).json({
         error:

@@ -20,6 +20,7 @@ import type {
   UserStatus,
   UserWorkspacePreferences,
 } from '../../src/types/platformTypes.ts';
+import { resolveAuthStoragePaths } from './persistentDataDir.ts';
 
 export const ROOT_ADMIN_ID = 'root-admin-permanent';
 export const DEVICE_SEAL_COOKIE_NAME = 'ol_dseal';
@@ -105,12 +106,10 @@ export interface VpsDatabaseSchema {
   vouchers: PromoVoucher[];
 }
 
-const DATA_DIR = path.resolve(
-  process.cwd(),
-  process.env.ORGLENS_DATA_DIR || './data'
-);
-const DB_FILE_PATH = path.join(DATA_DIR, 'orglens-vps-db.json');
-const DB_BACKUP_PATH = path.join(DATA_DIR, 'orglens-vps-db.json.bak');
+const AUTH_STORAGE = resolveAuthStoragePaths();
+const DATA_DIR = AUTH_STORAGE.primaryDir;
+const DB_FILE_PATH = AUTH_STORAGE.primaryDbPath;
+const DB_BACKUP_PATH = AUTH_STORAGE.primaryBackupPath;
 
 function hashPassword(password: string, salt?: string): {
   salt: string;
@@ -295,6 +294,40 @@ function ensureRootAdminIntegrity(
   return { state, migrated };
 }
 
+function scoreRecoveredDatabase(
+  parsed: VpsDatabaseSchema,
+  mtimeMs: number
+): number {
+  const users = Array.isArray(parsed.users) ? parsed.users : [];
+  const nonRootUsers = users.filter(
+    (u) => u && u.id !== ROOT_ADMIN_ID && !u.isRootAdmin
+  ).length;
+  const root = users.find((u) => u && (u.id === ROOT_ADMIN_ID || u.isRootAdmin));
+  const customRootBonus =
+    root && root.usingDefaultPassword === false ? 500 : 0;
+  const paymentsScore = Array.isArray(parsed.payments)
+    ? parsed.payments.length * 100
+    : 0;
+  const devicesScore = Array.isArray(parsed.registeredDevices)
+    ? parsed.registeredDevices.length * 50
+    : 0;
+  const ledgerScore = Array.isArray(parsed.ledger)
+    ? parsed.ledger.length * 10
+    : 0;
+  const vouchersScore = Array.isArray(parsed.vouchers)
+    ? Math.max(0, parsed.vouchers.length - 1) * 40
+    : 0;
+  return (
+    nonRootUsers * 10000 +
+    customRootBonus +
+    paymentsScore +
+    devicesScore +
+    ledgerScore +
+    vouchersScore +
+    Math.floor(mtimeMs / 1e12)
+  );
+}
+
 function loadDatabaseFromDisk(): VpsDatabaseSchema {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -302,23 +335,43 @@ function loadDatabaseFromDisk(): VpsDatabaseSchema {
     // Directory exists or read-only fallback
   }
 
-  const candidatePaths = [DB_FILE_PATH, DB_BACKUP_PATH];
-  for (const filePath of candidatePaths) {
+  let bestState: VpsDatabaseSchema | null = null;
+  let bestScore = -1;
+  let bestMtime = -1;
+  let bestPath = '';
+  let bestMigrated = false;
+
+  for (const filePath of AUTH_STORAGE.candidateReadPaths) {
     try {
-      if (fs.existsSync(filePath)) {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        const parsed = JSON.parse(raw) as VpsDatabaseSchema;
-        if (parsed && typeof parsed === 'object') {
-          const { state, migrated } = ensureRootAdminIntegrity(parsed);
-          if (migrated) {
-            persistDatabaseToDisk(state);
-          }
-          return state;
-        }
+      if (!fs.existsSync(filePath)) continue;
+      const stat = fs.statSync(filePath);
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const parsed = JSON.parse(raw) as VpsDatabaseSchema;
+      if (!parsed || typeof parsed !== 'object') continue;
+      const { state, migrated } = ensureRootAdminIntegrity(parsed);
+      const score = scoreRecoveredDatabase(state, stat.mtimeMs);
+      if (
+        bestState === null ||
+        score > bestScore ||
+        (score === bestScore && stat.mtimeMs > bestMtime)
+      ) {
+        bestState = state;
+        bestScore = score;
+        bestMtime = stat.mtimeMs;
+        bestPath = filePath;
+        bestMigrated = migrated;
       }
     } catch {
-      // Try backup path next
+      // Try next surviving backup candidate
     }
+  }
+
+  if (bestState) {
+    // Self-heal primary & mirror paths if we recovered from an external/mirror/bak copy after redeploy
+    if (bestMigrated || bestPath !== DB_FILE_PATH || !fs.existsSync(DB_FILE_PATH)) {
+      persistDatabaseToDisk(bestState);
+    }
+    return bestState;
   }
 
   const { state: fresh } = ensureRootAdminIntegrity({
@@ -351,6 +404,25 @@ function loadDatabaseFromDisk(): VpsDatabaseSchema {
   return fresh;
 }
 
+function writeAtomicDbCopy(
+  dirPath: string,
+  filePath: string,
+  backupPath: string,
+  serialized: string
+): void {
+  fs.mkdirSync(dirPath, { recursive: true });
+  const tmpPath = `${filePath}.tmp`;
+  fs.writeFileSync(tmpPath, serialized, 'utf8');
+  if (fs.existsSync(filePath)) {
+    try {
+      fs.copyFileSync(filePath, backupPath);
+    } catch {
+      // Non-fatal backup copy
+    }
+  }
+  fs.renameSync(tmpPath, filePath);
+}
+
 function persistDatabaseToDisk(state: VpsDatabaseSchema): void {
   ensureRootAdminIntegrity(state);
 
@@ -364,21 +436,29 @@ function persistDatabaseToDisk(state: VpsDatabaseSchema): void {
     state.ledger = state.ledger.slice(0, 5000);
   }
 
+  const serialized = JSON.stringify(state, null, 2);
+
   try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const serialized = JSON.stringify(state, null, 2);
-    const tmpPath = `${DB_FILE_PATH}.tmp`;
-    fs.writeFileSync(tmpPath, serialized, 'utf8');
-    if (fs.existsSync(DB_FILE_PATH)) {
-      try {
-        fs.copyFileSync(DB_FILE_PATH, DB_BACKUP_PATH);
-      } catch {
-        // Non-fatal backup copy
-      }
-    }
-    fs.renameSync(tmpPath, DB_FILE_PATH);
+    writeAtomicDbCopy(DATA_DIR, DB_FILE_PATH, DB_BACKUP_PATH, serialized);
   } catch (err) {
     console.error('Warning: Failed to persist VPS store to disk:', err);
+  }
+
+  if (
+    AUTH_STORAGE.mirrorDir &&
+    AUTH_STORAGE.mirrorDbPath &&
+    AUTH_STORAGE.mirrorBackupPath
+  ) {
+    try {
+      writeAtomicDbCopy(
+        AUTH_STORAGE.mirrorDir,
+        AUTH_STORAGE.mirrorDbPath,
+        AUTH_STORAGE.mirrorBackupPath,
+        serialized
+      );
+    } catch {
+      // Best-effort secondary mirror for redeploy resilience
+    }
   }
 }
 
@@ -2378,23 +2458,73 @@ export function exportFullVpsBackup(): VpsDatabaseSchema {
   };
 }
 
-export function importFullVpsBackup(payload: unknown): void {
+export interface RestoreVpsBackupSummary {
+  restoredUsersCount: number;
+  restoredMembersCount: number;
+  restoredAdminEmail: string;
+  restoredPaymentsCount: number;
+  restoredVouchersCount: number;
+  restoredDevicesCount: number;
+  restoredLedgerCount: number;
+}
+
+export function importFullVpsBackup(payload: unknown): RestoreVpsBackupSummary {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Invalid backup JSON payload.');
   }
-  const incoming = payload as Partial<VpsDatabaseSchema>;
+  const maybeWrapped = payload as { backup?: unknown };
+  const rawObject =
+    maybeWrapped.backup && typeof maybeWrapped.backup === 'object'
+      ? maybeWrapped.backup
+      : payload;
+  const incoming = rawObject as Partial<VpsDatabaseSchema>;
   const currentRoot = db.users.find((u) => u.isRootAdmin)!;
   const activeAdminSessions = [...db.sessions];
+
+  if (
+    typeof incoming.deviceHmacSecret === 'string' &&
+    incoming.deviceHmacSecret.length >= 32
+  ) {
+    db.deviceHmacSecret = incoming.deviceHmacSecret;
+  }
 
   if (incoming.settings && typeof incoming.settings === 'object') {
     db.settings = { ...createDefaultSettings(), ...incoming.settings };
   }
+
   if (Array.isArray(incoming.users)) {
-    const nonRootIncoming = incoming.users.filter(
-      (u) => u && u.id !== ROOT_ADMIN_ID && !u.isRootAdmin
+    const incomingRoot = incoming.users.find(
+      (u) => u && (u.id === ROOT_ADMIN_ID || u.isRootAdmin === true)
     );
-    db.users = [currentRoot, ...nonRootIncoming];
+    const nonRootIncoming = incoming.users.filter(
+      (u) =>
+        u &&
+        u.id !== ROOT_ADMIN_ID &&
+        !u.isRootAdmin &&
+        typeof u.email === 'string' &&
+        Boolean(u.passwordHash) &&
+        Boolean(u.passwordSalt)
+    );
+
+    const restoredRoot: StoredUserRecord =
+      incomingRoot &&
+      incomingRoot.passwordHash &&
+      incomingRoot.passwordSalt
+        ? {
+            ...currentRoot,
+            ...incomingRoot,
+            id: ROOT_ADMIN_ID,
+            isRootAdmin: true,
+            role: 'admin',
+            status: 'active',
+            plan: 'unlimited',
+            unlimitedExpiresAt: 'lifetime',
+          }
+        : currentRoot;
+
+    db.users = [restoredRoot, ...nonRootIncoming];
   }
+
   if (Array.isArray(incoming.registeredDevices)) {
     db.registeredDevices = incoming.registeredDevices;
   }
@@ -2410,8 +2540,20 @@ export function importFullVpsBackup(payload: unknown): void {
   if (Array.isArray(incoming.vouchers)) {
     db.vouchers = incoming.vouchers;
   }
+  // Keep current active admin session alive so restore finishes smoothly without logging out
   db.sessions = activeAdminSessions;
 
   ensureRootAdminIntegrity(db);
   persistDatabaseToDisk(db);
+
+  const rootAfter = db.users.find((u) => u.isRootAdmin)!;
+  return {
+    restoredUsersCount: db.users.length,
+    restoredMembersCount: db.users.filter((u) => !u.isRootAdmin).length,
+    restoredAdminEmail: rootAfter.email,
+    restoredPaymentsCount: db.payments.length,
+    restoredVouchersCount: db.vouchers.length,
+    restoredDevicesCount: db.registeredDevices.length,
+    restoredLedgerCount: db.ledger.length,
+  };
 }

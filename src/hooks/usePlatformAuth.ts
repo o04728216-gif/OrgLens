@@ -15,7 +15,10 @@ import {
   SESSION_INVALIDATED_EVENT,
   type SessionInvalidatedDetail,
 } from '../utils/authClient';
-import { collectDeviceRegistrationPayload } from '../utils/deviceFingerprint';
+import {
+  collectDeviceRegistrationPayload,
+  collectFastLoginDevicePayload,
+} from '../utils/deviceFingerprint';
 
 const DEFAULT_PUBLIC_CONFIG: PublicPlatformConfig = {
   defaultSignupCoins: 50,
@@ -191,7 +194,7 @@ export function usePlatformAuth(isAdminRoute: boolean) {
 
   const login = useCallback(
     async (identifier: string, password: string): Promise<UserAccountPublic> => {
-      const device = await collectDeviceRegistrationPayload();
+      const device = collectFastLoginDevicePayload();
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         credentials: 'same-origin',
