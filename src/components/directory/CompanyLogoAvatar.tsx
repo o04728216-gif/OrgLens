@@ -30,6 +30,7 @@ export const CompanyLogoAvatar: React.FC<CompanyLogoAvatarProps> = ({
           alt={`${name} logo`}
           referrerPolicy="no-referrer"
           loading="lazy"
+          decoding="async"
           onError={() => setImgError(true)}
           className="h-6 w-6 object-contain"
         />

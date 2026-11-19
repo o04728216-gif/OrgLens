@@ -6,6 +6,7 @@ import {
   type AuthenticatedRequest,
 } from '../middleware/authMiddleware.ts';
 import { verifyTronUsdtTransaction } from '../services/tronVerifierService.ts';
+import { markUserApiActivity } from '../services/worldwideCrawlerDaemon.ts';
 import {
   authenticateUser,
   changeSelfAccountPassword,
@@ -67,6 +68,7 @@ authAndBillingRouter.get(
 );
 
 authAndBillingRouter.post('/api/auth/signup', (req: Request, res: Response) => {
+  markUserApiActivity();
   try {
     const sealId = attachDeviceSealCookie(req, res);
     const email = String(req.body?.email || '');
@@ -115,6 +117,7 @@ authAndBillingRouter.post('/api/auth/signup', (req: Request, res: Response) => {
 });
 
 authAndBillingRouter.post('/api/auth/login', (req: Request, res: Response) => {
+  markUserApiActivity();
   try {
     const sealId = attachDeviceSealCookie(req, res);
     const identifier = String(

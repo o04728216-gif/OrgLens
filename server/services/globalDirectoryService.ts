@@ -1498,10 +1498,10 @@ export async function resolveFilteredGlobalCompanies(
     p.employeeRanges.length === 0 &&
     p.revenueRanges.length === 0;
 
-  // 2. INSTANT LOCAL-FIRST FAST PATH (< 12ms response!)
+  // 2. INSTANT LOCAL-FIRST FAST PATH (< 25ms response!)
   if (
-    vaultResult.companies.length >= 120 ||
-    (isUnfilteredWorldwide && vaultResult.companies.length >= 40)
+    vaultResult.companies.length >= 15 ||
+    (isUnfilteredWorldwide && vaultResult.companies.length >= 10)
   ) {
     const pageCompanies = attachLocalPatternAndConfirmedMetadata(
       vaultResult.companies.slice(0, COMPANIES_PER_PAGE)
@@ -1616,7 +1616,7 @@ export async function resolveFilteredGlobalCompanies(
             },
             [],
           ]),
-        1900
+        950
       )
     ),
   ]);
@@ -1693,12 +1693,12 @@ export async function resolveFilteredGlobalCompanies(
     return true;
   });
 
-  // Resolve real official corporate websites synchronously in one fast GraphQL/Clearbit batch (< 1.2s)
+  // Resolve real official corporate websites synchronously in one fast GraphQL/Clearbit batch (< 0.75s)
   const resolvedWithRealDomains = await resolveRealCompanyDomainsBatch(
     filteredCandidates.slice(0, 260),
     {
-      maxClearbitLookups: 20,
-      timeoutMs: 1400,
+      maxClearbitLookups: 12,
+      timeoutMs: 750,
     }
   );
 

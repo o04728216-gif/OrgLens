@@ -331,7 +331,7 @@ export const B2BLandingAuthPage: React.FC<B2BLandingAuthPageProps> = ({
                       <span>
                         {authMode === 'signup'
                           ? 'Provisioning Workspace...'
-                          : 'Signing In...'}
+                          : 'Verifying...'}
                       </span>
                     </>
                   ) : (

@@ -629,20 +629,30 @@ export async function buildFilterExplorerResponse(
   );
 
   // Prioritize already-cached rosters + confirmed-email companies + TheOrg companies for instant extraction
-  const prioritizedForRosters = [...allValidCompanies]
-    .sort((a, b) => {
-      const aCached = quickRosterCache.has(a.slug.toLowerCase()) ? 1 : 0;
-      const bCached = quickRosterCache.has(b.slug.toLowerCase()) ? 1 : 0;
-      if (aCached !== bCached) return bCached - aCached;
-      const aTheOrg = a.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
-      const bTheOrg = b.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
-      if (aTheOrg !== bTheOrg) return bTheOrg - aTheOrg;
-      return (b.confirmedEmailCount || 0) - (a.confirmedEmailCount || 0);
-    })
-    .slice(0, 24);
+  // Pull up to 60 companies so Full Names & Emails fills up to 500 contacts/page quickly
+  const sortedValid = [...allValidCompanies].sort((a, b) => {
+    const aCached = quickRosterCache.has(a.slug.toLowerCase()) ? 1 : 0;
+    const bCached = quickRosterCache.has(b.slug.toLowerCase()) ? 1 : 0;
+    if (aCached !== bCached) return bCached - aCached;
+    const aConf = (a.confirmedEmailCount || 0) > 0 ? 1 : 0;
+    const bConf = (b.confirmedEmailCount || 0) > 0 ? 1 : 0;
+    if (aConf !== bConf) return bConf - aConf;
+    const aTheOrg = a.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
+    const bTheOrg = b.sourceRegistry === 'TheOrg Directory' ? 1 : 0;
+    if (aTheOrg !== bTheOrg) return bTheOrg - aTheOrg;
+    return (b.confirmedEmailCount || 0) - (a.confirmedEmailCount || 0);
+  });
+
+  const cachedSlice = sortedValid
+    .filter((c) => quickRosterCache.has(c.slug.toLowerCase()))
+    .slice(0, 50);
+  const uncachedSlice = sortedValid
+    .filter((c) => !quickRosterCache.has(c.slug.toLowerCase()))
+    .slice(0, Math.max(12, 36 - cachedSlice.length));
+  const prioritizedForRosters = [...cachedSlice, ...uncachedSlice].slice(0, 60);
 
   const rawCompanyRosters = await Promise.race([
-    mapWithConcurrency(prioritizedForRosters, 16, (comp) =>
+    mapWithConcurrency(prioritizedForRosters, 20, (comp) =>
       fetchQuickCompanyRoster(comp)
     ),
     new Promise<EmployeeRecord[][]>((resolve) =>
@@ -653,7 +663,7 @@ export async function buildFilterExplorerResponse(
               (c) => quickRosterCache.get(c.slug.toLowerCase())?.data || []
             )
           ),
-        1500
+        850
       )
     ),
   ]);

@@ -20,6 +20,7 @@ import type {
   SidebarFiltersState,
 } from '../types';
 import { truncateIndustry20 } from '../utils/emailFormulas';
+import { matchesGeographyFilter } from '../utils/geographyAndRevenue';
 import { copyTextToClipboard } from '../utils/offlineStorage';
 import { scrollToListTop } from '../utils/scrollUtils';
 import { CompanyLogoAvatar } from './directory/CompanyLogoAvatar';
@@ -213,9 +214,59 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   const filteredGlobalCompanies = useMemo(() => {
     if (!activeDirectorySource) return [];
     // Keep ONLY companies with real verified domains — never synthesize slug.com
-    const realDomainRows = activeDirectorySource.companies.filter((comp) =>
+    let realDomainRows = activeDirectorySource.companies.filter((comp) =>
       Boolean(comp.domain && comp.domain.includes('.'))
     );
+
+    // Apply immediate client-side narrowing while the fresh SQLite 500/page payload streams in
+    if (globalDirectoryLoading) {
+      const nameQ = filters.companyNameFilter.trim().toLowerCase();
+      const indQ = filters.industryKeyword.trim().toLowerCase();
+      const locQ = filters.locationQuery.trim();
+      const hasGeo =
+        filters.selectedContinents.length > 0 ||
+        filters.selectedCountries.length > 0 ||
+        Boolean(locQ);
+
+      realDomainRows = realDomainRows.filter((comp) => {
+        if (nameQ) {
+          const hay = `${comp.name} ${comp.domain || ''} ${comp.slug || ''}`.toLowerCase();
+          if (!hay.includes(nameQ)) return false;
+        }
+        if (indQ) {
+          const indHay = `${comp.industry || ''} ${comp.name}`.toLowerCase();
+          if (!indHay.includes(indQ)) return false;
+        }
+        if (hasGeo) {
+          if (
+            !matchesGeographyFilter(
+              comp.location || '',
+              filters.selectedContinents,
+              filters.selectedCountries,
+              locQ,
+              comp.sourceCountrySlug
+            )
+          ) {
+            return false;
+          }
+        }
+        if (
+          filters.employeeRanges.length > 0 &&
+          comp.employeeRange &&
+          !filters.employeeRanges.includes(comp.employeeRange)
+        ) {
+          return false;
+        }
+        if (
+          filters.revenueRanges.length > 0 &&
+          comp.revenueRange &&
+          !filters.revenueRanges.includes(comp.revenueRange)
+        ) {
+          return false;
+        }
+        return true;
+      });
+    }
 
     const sorted =
       sortBy === 'name-asc'
@@ -241,10 +292,15 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
     return sorted.slice(0, 500);
   }, [
     activeDirectorySource,
+    globalDirectoryLoading,
     sortBy,
     filters.companyNameFilter,
     filters.industryKeyword,
     filters.locationQuery,
+    filters.selectedContinents,
+    filters.selectedCountries,
+    filters.employeeRanges,
+    filters.revenueRanges,
   ]);
 
   const effectiveTotalCompanies = useMemo(() => {
@@ -343,6 +399,12 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white min-w-0">
           <Globe2 className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0" />
           <span>Filter Explorer · Worldwide Companies</span>
+          {globalDirectoryLoading && !isPaginationLoading && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-600 dark:text-sky-400">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span>Updating...</span>
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-3 text-xs shrink-0">

@@ -1,4 +1,5 @@
 import React, {
+  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -8,7 +9,6 @@ import React, {
 import {
   Building2,
   Crown,
-  Loader2,
   Megaphone,
   Search,
   SlidersHorizontal,
@@ -67,6 +67,7 @@ import {
 import { SessionAndTabsBar } from './components/layout/SessionAndTabsBar';
 import { WidgetsDrawerBoard } from './components/layout/WidgetsDrawerBoard';
 import { OrgLensLogoLoaderOverlay } from './components/layout/OrgLensLogoLoaderOverlay';
+import { SignOutConfirmModal } from './components/layout/SignOutConfirmModal';
 import { B2BLandingAuthPage } from './components/landing/B2BLandingAuthPage';
 import { UsdtUpgradePage } from './components/billing/UsdtUpgradePage';
 import { AdminDashboardPage } from './components/admin/AdminDashboardPage';
@@ -175,6 +176,7 @@ export default function App() {
   const paginationRequestedPageRef = useRef<number | null>(null);
   const [postLoginOverlayVisible, setPostLoginOverlayVisible] = useState(false);
   const postLoginStartedAtRef = useRef<number>(0);
+  const [signOutConfirmOpen, setSignOutConfirmOpen] = useState(false);
 
   const [filterSelectedCompany, setFilterSelectedCompany] =
     useState<GlobalCompanyItem | null>(initialRoute.filterSelectedCompany);
@@ -440,7 +442,7 @@ export default function App() {
           maxAccuracy: nextMaxAccuracy,
         };
       });
-    }, 120);
+    }, 50);
     return () => window.clearTimeout(timer);
   }, [
     filters.companyNameFilter,
@@ -715,14 +717,8 @@ export default function App() {
       return;
     }
 
-    // Show loading indicator on initial empty state OR when user explicitly navigates to another pagination page on demand;
-    // keep Page 1 filter updates silent in background so displayed results never flash!
-    setGlobalDirectory((prev) => {
-      if (!prev || isExplicitPaginationTurn || globalPage > 1) {
-        setGlobalDirectoryLoading(true);
-      }
-      return prev;
-    });
+    // Show clear loading feedback on initial load, pagination clicks, or active filter updates
+    setGlobalDirectoryLoading(true);
 
     const controller = new AbortController();
 
@@ -743,7 +739,9 @@ export default function App() {
             }
           }
           directoryPageCacheRef.current.set(queryStr, payload);
-          setGlobalDirectory(payload);
+          startTransition(() => {
+            setGlobalDirectory(payload);
+          });
         }
       })
       .catch(() => {
@@ -795,7 +793,7 @@ export default function App() {
 
     const controller = new AbortController();
     const deferMs =
-      sessionMode === 'filter' && activeTab === 'industry' ? 320 : 0;
+      sessionMode === 'filter' && activeTab === 'industry' ? 40 : 0;
 
     const timer = window.setTimeout(() => {
       setFilterExplorerResult((prev) => {
@@ -822,7 +820,9 @@ export default function App() {
               }
             }
             explorerPageCacheRef.current.set(explorerQueryStr, payload);
-            setFilterExplorerResult(payload);
+            startTransition(() => {
+              setFilterExplorerResult(payload);
+            });
           }
         })
         .catch(() => {
@@ -850,9 +850,30 @@ export default function App() {
     effectiveOffline,
   ]);
 
+  const filtersSnapshotRef = useRef(filters);
+  filtersSnapshotRef.current = filters;
+
   const handleChangeFilters = useCallback(
     (updater: (prev: SidebarFiltersState) => SidebarFiltersState) => {
-      setFilters(updater);
+      const prevFilters = filtersSnapshotRef.current;
+      const nextFilters = updater(prevFilters);
+      const companyScopeChanged =
+        prevFilters.companyNameFilter !== nextFilters.companyNameFilter ||
+        prevFilters.industryKeyword !== nextFilters.industryKeyword ||
+        prevFilters.industryMatchMode !== nextFilters.industryMatchMode ||
+        prevFilters.locationQuery !== nextFilters.locationQuery ||
+        prevFilters.selectedIndustrySlugs.join(',') !==
+          nextFilters.selectedIndustrySlugs.join(',') ||
+        prevFilters.selectedContinents.join('|') !==
+          nextFilters.selectedContinents.join('|') ||
+        prevFilters.selectedCountries.join('|') !==
+          nextFilters.selectedCountries.join('|') ||
+        prevFilters.employeeRanges.join('|') !==
+          nextFilters.employeeRanges.join('|') ||
+        prevFilters.revenueRanges.join('|') !==
+          nextFilters.revenueRanges.join('|');
+
+      setFilters(nextFilters);
       setAppView('workspace');
       filterCompanyAbortRef.current?.abort();
       setIsFilterCompanyLoading(false);
@@ -860,7 +881,16 @@ export default function App() {
       setFilterCompanyResult(null);
       setFilterCompanyError(null);
       setSessionMode('filter');
-      setActiveTab('industry');
+
+      if (
+        companyScopeChanged ||
+        sessionMode !== 'filter' ||
+        (activeTab !== 'full-names-emails' &&
+          activeTab !== 'command-hierarchy')
+      ) {
+        setActiveTab('industry');
+      }
+
       setFilterSelectedDepartment('All');
       setFilterSelectedSeniority('All');
       paginationRequestedPageRef.current = null;
@@ -868,7 +898,7 @@ export default function App() {
       setContactsPage(1);
       setRolesPage(1);
     },
-    []
+    [sessionMode, activeTab]
   );
 
   const currentDomainResult = useMemo(() => {
@@ -1640,15 +1670,26 @@ export default function App() {
     [sessionMode, handleBackToCompaniesList]
   );
 
-  const handleLogoutAndReturnLanding = useCallback(async () => {
+  const requestSignOut = useCallback(() => {
+    setSignOutConfirmOpen(true);
+  }, []);
+
+  const confirmSignOutNow = useCallback(() => {
+    setSignOutConfirmOpen(false);
     setPostLoginOverlayVisible(false);
-    await logout();
+    logout();
     sessionSettledKeysRef.current.clear();
+    directoryPageCacheRef.current.clear();
+    explorerPageCacheRef.current.clear();
+    facetsCacheRef.current.clear();
     setSnapshots({});
     setActiveDomain(null);
     setDomainInput('');
     setFilterSelectedCompany(null);
     setFilterCompanyResult(null);
+    setGlobalDirectory(null);
+    setFilterFacets(null);
+    setFilterExplorerResult(null);
     setAppView('landing');
     setAuthMode('login');
   }, [logout]);
@@ -1660,15 +1701,15 @@ export default function App() {
     // Hard safety cap so slow networks never trap the user on the overlay
     const maxCapTimer = window.setTimeout(() => {
       setPostLoginOverlayVisible(false);
-    }, 3400);
+    }, 2400);
 
     const workspaceLoaded =
-      Boolean(globalDirectory) && !globalDirectoryLoading && !industriesLoading;
+      Boolean(globalDirectory) && !globalDirectoryLoading;
     const elapsed = Date.now() - postLoginStartedAtRef.current;
 
     let dismissTimer: number | undefined;
     if (workspaceLoaded || appView !== 'workspace') {
-      const remainingMinCycle = Math.max(0, 950 - elapsed);
+      const remainingMinCycle = Math.max(0, 650 - elapsed);
       dismissTimer = window.setTimeout(() => {
         setPostLoginOverlayVisible(false);
       }, remainingMinCycle);
@@ -1684,39 +1725,47 @@ export default function App() {
     postLoginOverlayVisible,
     globalDirectory,
     globalDirectoryLoading,
-    industriesLoading,
     appView,
   ]);
 
-  // Initial session validation spinner
+  // Initial session validation splash using matching OrgLens logo overlay
   if (authInitializing) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-[#090d16] text-slate-500">
-        <Loader2 className="h-6 w-6 animate-spin text-sky-500" />
-        <span className="text-xs font-medium">Loading OrgLens Workspace...</span>
-      </div>
+      <OrgLensLogoLoaderOverlay
+        visible={true}
+        subtitle="Restoring your OrgLens session..."
+      />
     );
   }
 
   // 1. /admin View (Comprehensive Admin Console + Admin Login Gate)
   if (appView === 'admin') {
     return (
-      <AdminDashboardPage
-        user={user}
-        publicConfig={publicConfig}
-        activeSection={adminSection}
-        onSelectSection={setAdminSection}
-        theme={theme}
-        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-        onLogin={login}
-        onLogout={() => void handleLogoutAndReturnLanding()}
-        onReturnToWorkspace={() =>
-          setAppView(user ? 'workspace' : 'landing')
-        }
-        onSyncAuthAndConfig={async () => {
-          await Promise.all([refreshAccount(), fetchPublicConfig(true)]);
-        }}
-      />
+      <>
+        <AdminDashboardPage
+          user={user}
+          publicConfig={publicConfig}
+          activeSection={adminSection}
+          onSelectSection={setAdminSection}
+          theme={theme}
+          onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+          onLogin={login}
+          onLogout={requestSignOut}
+          onReturnToWorkspace={() =>
+            setAppView(user ? 'workspace' : 'landing')
+          }
+          onSyncAuthAndConfig={async () => {
+            await Promise.all([refreshAccount(), fetchPublicConfig(true)]);
+          }}
+        />
+        <SignOutConfirmModal
+          open={signOutConfirmOpen}
+          userEmail={user?.email}
+          userName={user?.fullName}
+          onCancel={() => setSignOutConfirmOpen(false)}
+          onConfirm={confirmSignOutNow}
+        />
+      </>
     );
   }
 
@@ -1814,7 +1863,7 @@ export default function App() {
           void refreshAccount();
         }}
         onOpenAdmin={() => setAppView('admin')}
-        onLogout={() => void handleLogoutAndReturnLanding()}
+        onLogout={requestSignOut}
       />
 
       {appView === 'upgrade' ? (
@@ -1859,7 +1908,7 @@ export default function App() {
             onChangePassword={changePassword}
             onRotateSession={rotateSession}
             onRedeemVoucher={redeemVoucher}
-            onLogout={() => void handleLogoutAndReturnLanding()}
+            onLogout={requestSignOut}
           />
         </div>
       ) : (
@@ -2285,6 +2334,13 @@ export default function App() {
           </button>
         </nav>
       )}
+      <SignOutConfirmModal
+        open={signOutConfirmOpen}
+        userEmail={user?.email}
+        userName={user?.fullName}
+        onCancel={() => setSignOutConfirmOpen(false)}
+        onConfirm={confirmSignOutNow}
+      />
     </div>
   );
 }

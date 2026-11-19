@@ -243,16 +243,35 @@ export function usePlatformAuth(isAdminRoute: boolean) {
     []
   );
 
-  const logout = useCallback(async () => {
-    try {
-      await apiFetch('/api/auth/logout', { method: 'POST' });
-    } catch {
-      // Ignore network error on logout
-    }
+  const logout = useCallback(() => {
+    const token = loadAuthToken();
+    const deviceId =
+      typeof window !== 'undefined'
+        ? collectFastLoginDevicePayload().deviceInstallId
+        : '';
+    // Clear auth immediately in 0ms without blocking UI on network round-trip
     saveAuthToken('');
+    setSessionDisplacedNotice(null);
     setUser(null);
     setCoinLedger([]);
     setUsdtOrders([]);
+
+    if (token) {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+      };
+      if (deviceId) {
+        headers['X-OrgLens-Device-Id'] = deviceId;
+      }
+      void fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        keepalive: true,
+        headers,
+      }).catch(() => {
+        // Ignore offline/abort errors during immediate logout
+      });
+    }
   }, []);
 
   const updateProfile = useCallback(

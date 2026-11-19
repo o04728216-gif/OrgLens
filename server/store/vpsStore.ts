@@ -462,6 +462,15 @@ function persistDatabaseToDisk(state: VpsDatabaseSchema): void {
   }
 }
 
+let scheduledFlushTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleDatabaseFlush(): void {
+  if (scheduledFlushTimer) return;
+  scheduledFlushTimer = setTimeout(() => {
+    scheduledFlushTimer = null;
+    persistDatabaseToDisk(db);
+  }, 25);
+}
+
 const db: VpsDatabaseSchema = loadDatabaseFromDisk();
 
 export function toPublicUser(user: StoredUserRecord): UserAccountPublic {
@@ -1028,7 +1037,7 @@ export function authenticateUser(input: {
     'another_device',
     sealId
   );
-  persistDatabaseToDisk(db);
+  scheduleDatabaseFlush();
 
   return {
     token,

@@ -126,7 +126,7 @@ const bootstrapPromise = (async () => {
         // Non-fatal background warm-up
       }
     })();
-  }, 600);
+  }, 4000);
 })();
 
 app.use(async (req: Request, res: Response, next: NextFunction) => {

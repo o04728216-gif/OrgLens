@@ -66,7 +66,14 @@ function isSuspectDomainQuickCheck(
 
 function runVaultStartupMaintenance(db: DatabaseSync): void {
   try {
-    // 1. Clean out any legacy slug-synthesized fake .com domains
+    const doneRow = db
+      .prepare(`SELECT value FROM vault_meta WHERE key = 'maintenance_v2_done'`)
+      .get() as { value: string } | undefined;
+    if (doneRow?.value === '1') {
+      return;
+    }
+
+    // 1. Clean out any legacy slug-synthesized fake .com domains (runs once)
     db.exec(`
       UPDATE companies
       SET domain = NULL, website_url = NULL
@@ -193,6 +200,11 @@ function runVaultStartupMaintenance(db: DatabaseSync): void {
         }
       }
     }
+
+    db.prepare(
+      `INSERT INTO vault_meta (key, value) VALUES ('maintenance_v2_done', '1')
+       ON CONFLICT(key) DO UPDATE SET value = '1'`
+    ).run();
   } catch {
     // Non-fatal startup maintenance
   }
@@ -305,6 +317,17 @@ function getDb(): DatabaseSync {
       roster_json TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS vault_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS vault_aggregates_cache (
+      cache_key TEXT PRIMARY KEY,
+      payload_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
 
   runVaultStartupMaintenance(db);
@@ -349,8 +372,6 @@ const vaultQueryRamCache = new Map<
 
 function bumpCachedCompanyCount(delta: number): void {
   if (delta > 0) {
-    vaultQueryRamCache.clear();
-    cachedVaultGroupBreakdowns = null;
     if (cachedSummarySnapshot) {
       cachedSummarySnapshot.data.vaultCompaniesCount += delta;
       cachedSummarySnapshot.data.liveFederatedCatalogTotal = Math.max(
@@ -438,8 +459,9 @@ export function saveVerifiedDomainsToVaultCache(
         updCompany.run(dom, webUrl, key);
       }
       db.exec('COMMIT');
-      vaultQueryRamCache.clear();
-      cachedVaultGroupBreakdowns = null;
+      if (entries.length > 0) {
+        vaultQueryRamCache.clear();
+      }
     } catch {
       try {
         db.exec('ROLLBACK');
@@ -552,11 +574,8 @@ export function upsertVaultCompanies(
       count++;
     }
     db.exec('COMMIT');
-    if (count > 0) {
-      if (options?.invalidateQueryCache) {
-        vaultQueryRamCache.clear();
-      }
-      cachedVaultGroupBreakdowns = null;
+    if (count > 0 && options?.invalidateQueryCache) {
+      vaultQueryRamCache.clear();
     }
   } catch (err) {
     try {
@@ -892,25 +911,22 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
   const offset = Math.max(0, (q.page - 1) * q.perPage);
+  const hasFreeTextFilter = Boolean(
+    cleanCompanyQuery ||
+      (q.locationQuery && q.locationQuery.trim()) ||
+      (q.industryKeyword && q.industryKeyword.trim()) ||
+      (q.industryTokens && q.industryTokens.length > 0)
+  );
 
-  const orderParams: Array<string | number> = [];
-  let queryMatchOrderPrefix = '';
-  if (cleanCompanyQuery) {
-    const cleanDomainRoot = cleanCompanyQuery.replace(/^www\./, '');
-    queryMatchOrderPrefix = `
-      CASE
-        WHEN name_lower = ? OR domain = ? OR domain = ? THEN 3
-        WHEN name_lower LIKE ? OR domain LIKE ? THEN 2
-        ELSE 1
-      END DESC,`;
-    orderParams.push(
-      cleanCompanyQuery,
-      cleanDomainRoot,
-      `${cleanDomainRoot}.com`,
-      `${cleanCompanyQuery}%`,
-      `${cleanDomainRoot}%`
-    );
-  }
+  // Use indexed fast sort for non-free-text queries; for free-text LIKE scans, avoid scanning
+  // all 881k rows into a temp B-tree by fetching bounded candidates fast and ranking in JS (< 2ms).
+  const candidateLimit =
+    hasFreeTextFilter && q.page === 1
+      ? Math.max(q.perPage, 750)
+      : q.perPage;
+  const orderClause = hasFreeTextFilter
+    ? ''
+    : 'ORDER BY confirmed_email_count DESC, updated_at DESC';
 
   const rows = db
     .prepare(
@@ -919,33 +935,10 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
               registry_id, confirmed_email_count
        FROM companies
        ${whereSql}
-       ORDER BY ${queryMatchOrderPrefix}
-                confirmed_email_count DESC,
-                CASE WHEN logo_url IS NOT NULL AND logo_url != '' THEN 1 ELSE 0 END DESC,
-                CASE employee_range
-                  WHEN '10,000+' THEN 7
-                  WHEN '5,001 - 10,000' THEN 6
-                  WHEN '1,001 - 5,000' THEN 5
-                  WHEN '501 - 1,000' THEN 4
-                  WHEN '201 - 500' THEN 3
-                  WHEN '51 - 200' THEN 2
-                  ELSE 1
-                END DESC,
-                CASE revenue_range
-                  WHEN '$10B+' THEN 8
-                  WHEN '$1B - $10B' THEN 7
-                  WHEN '$500M - $1B' THEN 6
-                  WHEN '$100M - $500M' THEN 5
-                  WHEN '$50M - $100M' THEN 4
-                  WHEN '$10M - $50M' THEN 3
-                  WHEN '$1M - $10M' THEN 2
-                  ELSE 1
-                END DESC,
-                name_lower ASC,
-                slug ASC
+       ${orderClause}
        LIMIT ? OFFSET ?`
     )
-    .all(...params, ...orderParams, q.perPage, offset) as Array<{
+    .all(...params, candidateLimit, offset) as Array<{
     slug: string;
     name: string;
     domain: string | null;
@@ -961,17 +954,82 @@ export function queryVaultCompanies(q: VaultCompanyQuery): {
     confirmed_email_count: number;
   }>;
 
+  const empRank: Record<string, number> = {
+    '10,000+': 7,
+    '5,001 - 10,000': 6,
+    '1,001 - 5,000': 5,
+    '501 - 1,000': 4,
+    '201 - 500': 3,
+    '51 - 200': 2,
+    '1 - 50': 1,
+  };
+  const revRank: Record<string, number> = {
+    '$10B+': 8,
+    '$1B - $10B': 7,
+    '$500M - $1B': 6,
+    '$100M - $500M': 5,
+    '$50M - $100M': 4,
+    '$10M - $50M': 3,
+    '$1M - $10M': 2,
+    'Under $1M': 1,
+  };
+  const cleanDomainRoot = cleanCompanyQuery.replace(/^www\./, '');
+
+  rows.sort((a, b) => {
+    if (cleanCompanyQuery) {
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+      const aDom = (a.domain || '').toLowerCase();
+      const bDom = (b.domain || '').toLowerCase();
+      const aExact =
+        aName === cleanCompanyQuery ||
+        aDom === cleanDomainRoot ||
+        aDom === `${cleanDomainRoot}.com`
+          ? 3
+          : aName.startsWith(cleanCompanyQuery) || aDom.startsWith(cleanDomainRoot)
+          ? 2
+          : 1;
+      const bExact =
+        bName === cleanCompanyQuery ||
+        bDom === cleanDomainRoot ||
+        bDom === `${cleanDomainRoot}.com`
+          ? 3
+          : bName.startsWith(cleanCompanyQuery) || bDom.startsWith(cleanDomainRoot)
+          ? 2
+          : 1;
+      if (aExact !== bExact) return bExact - aExact;
+    }
+    if (a.confirmed_email_count !== b.confirmed_email_count) {
+      return b.confirmed_email_count - a.confirmed_email_count;
+    }
+    const aLogo = a.logo_url ? 1 : 0;
+    const bLogo = b.logo_url ? 1 : 0;
+    if (aLogo !== bLogo) return bLogo - aLogo;
+    const aEmp = empRank[a.employee_range] || 1;
+    const bEmp = empRank[b.employee_range] || 1;
+    if (aEmp !== bEmp) return bEmp - aEmp;
+    const aRev = revRank[a.revenue_range] || 1;
+    const bRev = revRank[b.revenue_range] || 1;
+    if (aRev !== bRev) return bRev - aRev;
+    return a.name.localeCompare(b.name);
+  });
+
+  const slicedRows = rows.slice(0, q.perPage);
+
   let totalMatchingInVault = 0;
-  if (q.page === 1 && rows.length < q.perPage) {
-    totalMatchingInVault = rows.length;
+  if (q.page === 1 && slicedRows.length < q.perPage) {
+    totalMatchingInVault = slicedRows.length;
+  } else if (!hasFreeTextFilter) {
+    // Avoid slow 881k COUNT(*) scan; exact totals are provided by cached group breakdowns & facets
+    totalMatchingInVault = offset + slicedRows.length;
   } else {
-    const countRow = db
-      .prepare(`SELECT COUNT(*) AS cnt FROM companies ${whereSql}`)
-      .get(...params) as { cnt: number } | undefined;
-    totalMatchingInVault = Number(countRow?.cnt || 0);
+    totalMatchingInVault =
+      rows.length > q.perPage
+        ? offset + rows.length
+        : offset + slicedRows.length;
   }
 
-  const companies: GlobalCompanyItem[] = rows.map((r) => ({
+  const companies: GlobalCompanyItem[] = slicedRows.map((r) => ({
     id: r.registry_id || r.slug,
     slug: r.slug,
     name: r.name,
@@ -1019,6 +1077,34 @@ export function getVaultGroupBreakdowns(): {
   }
 
   const db = getDb();
+  const MAX_AGE_MS = 60 * 60_000;
+  try {
+    const persisted = db
+      .prepare(
+        `SELECT payload_json, updated_at FROM vault_aggregates_cache WHERE cache_key = 'group_breakdowns' LIMIT 1`
+      )
+      .get() as { payload_json: string; updated_at: number } | undefined;
+    if (persisted?.payload_json && Date.now() - persisted.updated_at < MAX_AGE_MS) {
+      const parsed = JSON.parse(persisted.payload_json) as {
+        byCountry: Array<[string, number]>;
+        byEmployeeRange: Array<[string, number]>;
+        byRevenueRange: Array<[string, number]>;
+        totalRealDomainInVault: number;
+      };
+      const snapshot = {
+        byCountry: new Map(parsed.byCountry),
+        byEmployeeRange: new Map(parsed.byEmployeeRange),
+        byRevenueRange: new Map(parsed.byRevenueRange),
+        totalRealDomainInVault: Number(parsed.totalRealDomainInVault || 0),
+        expiresAt: persisted.updated_at + MAX_AGE_MS,
+      };
+      cachedVaultGroupBreakdowns = snapshot;
+      return snapshot;
+    }
+  } catch {
+    // Recompute cleanly below
+  }
+
   const byCountry = new Map<string, number>();
   const byEmployeeRange = new Map<string, number>();
   const byRevenueRange = new Map<string, number>();
@@ -1063,14 +1149,35 @@ export function getVaultGroupBreakdowns(): {
     )
     .get() as { cnt: number } | undefined;
 
+  const totalRealDomainInVault = Number(domRow?.cnt || 0);
+  const now = Date.now();
   const snapshot = {
     byCountry,
     byEmployeeRange,
     byRevenueRange,
-    totalRealDomainInVault: Number(domRow?.cnt || 0),
-    expiresAt: Date.now() + 45_000,
+    totalRealDomainInVault,
+    expiresAt: now + MAX_AGE_MS,
   };
   cachedVaultGroupBreakdowns = snapshot;
+  try {
+    db.prepare(
+      `INSERT INTO vault_aggregates_cache (cache_key, payload_json, updated_at)
+       VALUES ('group_breakdowns', ?, ?)
+       ON CONFLICT(cache_key) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         updated_at = excluded.updated_at`
+    ).run(
+      JSON.stringify({
+        byCountry: Array.from(byCountry.entries()),
+        byEmployeeRange: Array.from(byEmployeeRange.entries()),
+        byRevenueRange: Array.from(byRevenueRange.entries()),
+        totalRealDomainInVault,
+      }),
+      now
+    );
+  } catch {
+    // Non-fatal cache write
+  }
   return snapshot;
 }
 
@@ -1140,6 +1247,27 @@ export function deriveIndustriesFromVault(): GlobalIndustryOption[] {
   }
 
   const db = getDb();
+  const MAX_AGE_MS = 60 * 60_000;
+  try {
+    const persisted = db
+      .prepare(
+        `SELECT payload_json, updated_at FROM vault_aggregates_cache WHERE cache_key = 'vault_industries' LIMIT 1`
+      )
+      .get() as { payload_json: string; updated_at: number } | undefined;
+    if (persisted?.payload_json && Date.now() - persisted.updated_at < MAX_AGE_MS) {
+      const parsed = JSON.parse(persisted.payload_json) as GlobalIndustryOption[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        cachedVaultIndustries = {
+          data: parsed,
+          expiresAt: persisted.updated_at + MAX_AGE_MS,
+        };
+        return parsed;
+      }
+    }
+  } catch {
+    // Recompute cleanly below
+  }
+
   const rows = db
     .prepare(
       `SELECT industry, COUNT(*) AS cnt
@@ -1178,10 +1306,22 @@ export function deriveIndustriesFromVault(): GlobalIndustryOption[] {
   const sorted = Array.from(bySlug.values()).sort(
     (a, b) => b.companyCount - a.companyCount
   );
+  const now = Date.now();
   cachedVaultIndustries = {
     data: sorted,
-    expiresAt: Date.now() + 30 * 60_000,
+    expiresAt: now + MAX_AGE_MS,
   };
+  try {
+    db.prepare(
+      `INSERT INTO vault_aggregates_cache (cache_key, payload_json, updated_at)
+       VALUES ('vault_industries', ?, ?)
+       ON CONFLICT(cache_key) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         updated_at = excluded.updated_at`
+    ).run(JSON.stringify(sorted), now);
+  } catch {
+    // Non-fatal cache write
+  }
   return sorted;
 }
 
@@ -1375,6 +1515,27 @@ export function getVaultSummaryCounts(): SummaryCountsSnapshot {
   }
 
   const db = getDb();
+  const MAX_AGE_MS = 15 * 60_000;
+  try {
+    const persisted = db
+      .prepare(
+        `SELECT payload_json, updated_at FROM vault_aggregates_cache WHERE cache_key = 'summary_counts' LIMIT 1`
+      )
+      .get() as { payload_json: string; updated_at: number } | undefined;
+    if (persisted?.payload_json && Date.now() - persisted.updated_at < MAX_AGE_MS) {
+      const parsed = JSON.parse(persisted.payload_json) as SummaryCountsSnapshot;
+      if (parsed && typeof parsed.vaultCompaniesCount === 'number') {
+        cachedSummarySnapshot = {
+          data: parsed,
+          expiresAt: persisted.updated_at + MAX_AGE_MS,
+        };
+        return parsed;
+      }
+    }
+  } catch {
+    // Recompute cleanly below
+  }
+
   const cRow = db
     .prepare(`SELECT COUNT(*) AS cnt FROM companies`)
     .get() as { cnt: number } | undefined;
@@ -1402,6 +1563,7 @@ export function getVaultSummaryCounts(): SummaryCountsSnapshot {
     104_850_000
   );
 
+  const now = Date.now();
   const snapshot: SummaryCountsSnapshot = {
     vaultCompaniesCount,
     realDomainCompaniesCount,
@@ -1411,8 +1573,19 @@ export function getVaultSummaryCounts(): SummaryCountsSnapshot {
   };
   cachedSummarySnapshot = {
     data: snapshot,
-    expiresAt: Date.now() + 60_000,
+    expiresAt: now + MAX_AGE_MS,
   };
+  try {
+    db.prepare(
+      `INSERT INTO vault_aggregates_cache (cache_key, payload_json, updated_at)
+       VALUES ('summary_counts', ?, ?)
+       ON CONFLICT(cache_key) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         updated_at = excluded.updated_at`
+    ).run(JSON.stringify(snapshot), now);
+  } catch {
+    // Non-fatal cache write
+  }
   return snapshot;
 }
 

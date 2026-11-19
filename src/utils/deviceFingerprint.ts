@@ -463,8 +463,8 @@ function collectFastHardwareMeta() {
 }
 
 /**
- * Instant (< 5ms) device payload for Sign In: skips slow OfflineAudioContext &
- * async IndexedDB locks so users log straight into the dashboard immediately.
+ * Instant (< 0.2ms) device payload for Sign In: skips WebGL context creation,
+ * OfflineAudioContext, & async IndexedDB locks so users log straight in immediately.
  */
 export function collectFastLoginDevicePayload(): DeviceRegistrationPayload {
   const deviceInstallId = getOrCreateClientDeviceId();
@@ -472,19 +472,43 @@ export function collectFastLoginDevicePayload(): DeviceRegistrationPayload {
   writeCookieInstallId(deviceInstallId);
   writeWindowNameId(deviceInstallId);
 
-  const meta = collectFastHardwareMeta();
+  const nav = typeof navigator !== 'undefined' ? navigator : ({} as Navigator);
+  const scr = typeof screen !== 'undefined' ? screen : ({} as Screen);
+  const navWithUAData = nav as Navigator & {
+    userAgentData?: { platform?: string };
+    deviceMemory?: number;
+  };
+  const platform = String(
+    navWithUAData.userAgentData?.platform || nav.platform || 'Web'
+  ).trim();
+  const cpuCores = Number(nav.hardwareConcurrency || 0);
+  const memoryGb = Number(navWithUAData.deviceMemory || 0);
+  const screenW = Math.max(Number(scr.width || 0), Number(scr.height || 0));
+  const screenH = Math.min(Number(scr.width || 0), Number(scr.height || 0));
+  const colorDepth = Number(scr.colorDepth || 24);
+  const pixelRatio = Number(
+    (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1).toFixed(2)
+  );
+  let timezone = 'UTC';
+  try {
+    timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    timezone = 'UTC';
+  }
 
   return {
     deviceInstallId,
     hardwareHash: '',
     canvasFontHash: '',
-    deviceLabel: meta.deviceLabel,
-    platform: meta.platform,
-    gpuRenderer: meta.shortGpu,
-    screenProfile: meta.screenProfile,
-    cpuCores: meta.cpuCores,
-    memoryGb: meta.memoryGb,
-    timezone: meta.timezone,
+    deviceLabel: `${platform} · ${screenW}x${screenH}${
+      cpuCores ? ` · ${cpuCores} Cores` : ''
+    }`,
+    platform,
+    gpuRenderer: 'Browser Session',
+    screenProfile: `${screenW}x${screenH}@${pixelRatio}x (${colorDepth}-bit)`,
+    cpuCores,
+    memoryGb,
+    timezone,
   };
 }
 
