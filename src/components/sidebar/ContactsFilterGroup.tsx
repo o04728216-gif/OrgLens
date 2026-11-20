@@ -217,13 +217,14 @@ export const ContactsFilterGroup: React.FC<ContactsFilterGroupProps> = ({
           opened={isSectionOpen('accuracy-score')}
           onToggle={onToggleSection}
         >
-          <div className="px-3.5 pb-3.5 pt-2 space-y-2.5 border-t border-slate-200/60 dark:border-slate-800/60">
+          <div className="px-3.5 pb-3.5 pt-2 space-y-2.5 border-t border-bone-200/80 dark:border-petrol-800/80">
             <div className="flex flex-wrap items-center gap-1.5">
               {[
                 { label: 'All (50–99%)', min: 50, max: 99 },
                 { label: '75–99%', min: 75, max: 99 },
                 { label: '85–99%', min: 85, max: 99 },
                 { label: '90%+', min: 90, max: 99 },
+                { label: '99% Verified', min: 99, max: 99 },
               ].map((preset) => {
                 const active =
                   filters.minAccuracy === preset.min &&
@@ -239,10 +240,10 @@ export const ContactsFilterGroup: React.FC<ContactsFilterGroupProps> = ({
                         maxAccuracy: preset.max,
                       }))
                     }
-                    className={`px-2.5 py-1 rounded-lg text-xs font-mono tabular-nums font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                       active
-                        ? 'bg-sky-600 text-white'
-                        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-sky-500/50'
+                        ? 'bg-petrol-700 text-bone-50 dark:bg-lemon-400 dark:text-petrol-950'
+                        : 'bg-bone-50 dark:bg-petrol-950 border border-bone-300 dark:border-petrol-700 text-petrol-800 dark:text-bone-200 hover:border-petrol-600 dark:hover:border-lemon-400/70'
                     }`}
                   >
                     {preset.label}
@@ -252,25 +253,27 @@ export const ContactsFilterGroup: React.FC<ContactsFilterGroupProps> = ({
             </div>
 
             <div className="space-y-1">
-              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-bone-200/75">
                 <span>Minimum Accuracy</span>
-                <span className="font-mono tabular-nums font-semibold text-slate-800 dark:text-slate-200">
+                <span className="font-mono tabular-nums font-semibold text-petrol-900 dark:text-lemon-300">
                   {filters.minAccuracy}% – {filters.maxAccuracy}%
                 </span>
               </div>
               <input
                 type="range"
                 min={50}
-                max={98}
+                max={99}
                 value={filters.minAccuracy}
-                onChange={(e) =>
+                onChange={(e) => {
+                  const nextMin = Number(e.target.value);
                   onChangeFilters((prev) => ({
                     ...prev,
-                    minAccuracy: Number(e.target.value),
-                  }))
-                }
+                    minAccuracy: nextMin,
+                    maxAccuracy: Math.max(nextMin, prev.maxAccuracy),
+                  }));
+                }}
                 aria-label="Minimum email accuracy percentage"
-                className="w-full accent-sky-600 cursor-pointer"
+                className="w-full accent-petrol-700 dark:accent-lemon-400 cursor-pointer"
               />
             </div>
           </div>

@@ -876,7 +876,7 @@ export default function App() {
   // 2. Contact Cohort Loader — Instant 0ms swap on cached pages + coalesced in-flight prefetch + no contention with Companies tab!
   useEffect(() => {
     if (effectiveOffline || !user || appView !== 'workspace') return;
-    if (sessionMode !== 'filter' && activeFilterCount === 0) {
+    if (sessionMode !== 'filter' || filterSelectedCompany) {
       return;
     }
 
@@ -989,8 +989,8 @@ export default function App() {
     user,
     appView,
     sessionMode,
+    filterSelectedCompany,
     activeTab,
-    activeFilterCount,
     globalDirectoryLoading,
     buildExplorerParams,
     globalPage,
@@ -1023,21 +1023,55 @@ export default function App() {
 
       setFilters(nextFilters);
       setAppView('workspace');
+
+      // Contact-only filters (Accuracy Score, Contact Name, Role, Seniority, Department, Email Formula)
+      // directly filter the active Full Names & Emails / Command Hierarchy list in BOTH Domain Lookup
+      // AND Filter Explorer (including when viewing a specific company) without switching to Companies!
+      if (!companyScopeChanged) {
+        if (sessionMode === 'domain') {
+          if (activeTab === 'industry') {
+            setActiveTab('full-names-emails');
+          }
+          setContactsPage(1);
+          setRolesPage(1);
+          return;
+        }
+
+        if (filterSelectedCompany) {
+          if (activeTab === 'industry') {
+            setActiveTab('full-names-emails');
+          }
+          setContactsPage(1);
+          setRolesPage(1);
+          return;
+        }
+
+        // General Filter Explorer mode: switch from Companies list straight to Full Names & Emails
+        // so Accuracy Score and contact filters immediately reflect on the contacts list.
+        setSessionMode('filter');
+        if (
+          activeTab !== 'full-names-emails' &&
+          activeTab !== 'command-hierarchy'
+        ) {
+          setActiveTab('full-names-emails');
+        }
+        setFilterSelectedDepartment('All');
+        setFilterSelectedSeniority('All');
+        paginationRequestedPageRef.current = null;
+        setGlobalPage(1);
+        setContactsPage(1);
+        setRolesPage(1);
+        return;
+      }
+
+      // Company-level scope filter changed (Country, Industry, Revenue, Headcount, Company Name)
       filterCompanyAbortRef.current?.abort();
       setIsFilterCompanyLoading(false);
       setFilterSelectedCompany(null);
       setFilterCompanyResult(null);
       setFilterCompanyError(null);
       setSessionMode('filter');
-
-      if (
-        companyScopeChanged ||
-        sessionMode !== 'filter' ||
-        (activeTab !== 'full-names-emails' &&
-          activeTab !== 'command-hierarchy')
-      ) {
-        setActiveTab('industry');
-      }
+      setActiveTab('industry');
 
       setFilterSelectedDepartment('All');
       setFilterSelectedSeniority('All');
@@ -1046,7 +1080,7 @@ export default function App() {
       setContactsPage(1);
       setRolesPage(1);
     },
-    [sessionMode, activeTab]
+    [sessionMode, activeTab, filterSelectedCompany]
   );
 
   const currentDomainResult = useMemo(() => {
@@ -2315,6 +2349,14 @@ export default function App() {
                 coherentMatchedOrgs={
                   hasCoherentFilterTotals ? coherentFilterOrgsTotal : undefined
                 }
+                onResetAccuracyFilter={() => {
+                  setFilters((prev) => ({
+                    ...prev,
+                    minAccuracy: 50,
+                    maxAccuracy: 99,
+                  }));
+                  setContactsPage(1);
+                }}
               />
             </section>
 

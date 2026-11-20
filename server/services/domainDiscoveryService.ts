@@ -47,6 +47,10 @@ import {
 import { searchDomainEmailIntelligenceOnWeb } from './googleWebSearchGrounding.ts';
 import { applyManualOverrideToSearchResponse } from './manualOverrideApplier.ts';
 import {
+  harvestDeepPeopleWave2,
+  harvestPeopleMultiSourceWave1,
+} from './peopleHarvesterService.ts';
+import {
   isSuspectGeneratedDomain,
   resolveSingleRealCompanyDomain,
 } from './realDomainResolver.ts';
@@ -174,7 +178,12 @@ export async function discoverDomainEmployees(
       domain,
       explicitCompanySlug
     );
-    if (sqliteCached && sqliteCached.employees?.length > 0) {
+    const cachedCount = sqliteCached?.employees?.length || 0;
+    const cachedAgeMs = sqliteCached?.fetchedAt
+      ? startedAt - new Date(sqliteCached.fetchedAt).getTime()
+      : 0;
+    const isSparseStaleCache = cachedCount < 5 && cachedAgeMs > 10 * 60 * 1000;
+    if (sqliteCached && cachedCount > 0 && !isSparseStaleCache) {
       if (sqliteCached.domain) {
         domainCache.set(sqliteCached.domain, {
           data: sqliteCached,
@@ -278,6 +287,7 @@ export async function discoverDomainEmployees(
       mxInfo,
       crawledEmails,
       webGroundedIntel,
+      multiSourcePeopleWave1,
       yahooLiPage1,
       yahooLiPage2,
       yahooLiExecs,
@@ -293,11 +303,11 @@ export async function discoverDomainEmployees(
           null,
           explicitCompanySlug
         ),
-        3800,
+        4500,
         null
       ),
       resolvedDomain && isValidDomain(resolvedDomain)
-        ? withSoftDeadline(inspectTargetWebsite(resolvedDomain), 7000, emptySite)
+        ? withSoftDeadline(inspectTargetWebsite(resolvedDomain), 4200, emptySite)
         : Promise.resolve(emptySite),
       resolvedDomain && isValidDomain(resolvedDomain)
         ? withSoftDeadline(verifyDomainMx(resolvedDomain), 950, {
@@ -316,7 +326,7 @@ export async function discoverDomainEmployees(
               knownEmployees: [],
               fastMode: true,
             }),
-            2400,
+            2600,
             emptyCrawl
           )
         : Promise.resolve(emptyCrawl),
@@ -325,13 +335,18 @@ export async function discoverDomainEmployees(
             searchDomainEmailIntelligenceOnWeb(
               resolvedDomain,
               guessedBrandName,
-              6200,
+              4400,
               forceRefresh
             ),
-            6400,
+            4500,
             null
           )
         : Promise.resolve(null),
+      withSoftDeadline(
+        harvestPeopleMultiSourceWave1(guessedBrandName, resolvedDomain, 3200),
+        3400,
+        [] as CandidateEmployee[]
+      ),
       withSoftDeadline(
         queryYahooSafe(linkedInCompanyQuery, 1, 25, 1850),
         1950,
@@ -451,14 +466,9 @@ export async function discoverDomainEmployees(
       }
     }
 
-    for (const cand of [
-      ...officerCandidates,
-      ...siteInfo.employees,
-      ...(webGroundedIntel?.employees || []),
-      ...parsedSearchCandidates,
-    ]) {
+    const mergeCandidateIntoMap = (cand: CandidateEmployee) => {
       const normName = normalizePersonKey(cand.fullName);
-      if (!normName) continue;
+      if (!normName) return;
       const existingKey = normNameToPrimaryKey.get(normName);
       const existing = existingKey ? candidateMap.get(existingKey) : undefined;
       if (!existing) {
@@ -484,6 +494,29 @@ export async function discoverDomainEmployees(
             emailSourceUrl,
           });
         }
+      }
+    };
+
+    for (const cand of [
+      ...officerCandidates,
+      ...siteInfo.employees,
+      ...(webGroundedIntel?.employees || []),
+      ...multiSourcePeopleWave1,
+      ...parsedSearchCandidates,
+    ]) {
+      mergeCandidateIntoMap(cand);
+    }
+
+    // Adaptive Wave-2 Deep Department Sweep: ONLY fires when Wave-1 yielded < 25 real names
+    // so sparse/mid-market companies reliably expand to full names lists while mega-enterprises stay instant!
+    if (candidateMap.size < 25 && companyName) {
+      const wave2Candidates = await withSoftDeadline(
+        harvestDeepPeopleWave2(companyName, resolvedDomain, 2000),
+        2150,
+        [] as CandidateEmployee[]
+      );
+      for (const cand of wave2Candidates) {
+        mergeCandidateIntoMap(cand);
       }
     }
 

@@ -333,7 +333,7 @@ export const TopBarQuickSearch: React.FC<TopBarQuickSearchProps> = ({
   return (
     <div
       ref={containerRef}
-      className="relative w-full max-w-[175px] sm:max-w-[240px] md:max-w-[280px] mx-1 sm:mx-2"
+      className="hidden md:block relative w-full max-w-[240px] lg:max-w-[280px] mx-2"
     >
       {/* Compact Half-Width Quick Search Input */}
       <div className="relative flex items-center rounded-xl bg-petrol-800/95 hover:bg-petrol-800 focus-within:bg-petrol-900 border border-petrol-500/70 focus-within:border-lemon-400 focus-within:ring-2 focus-within:ring-lemon-400/25 transition-all duration-150">

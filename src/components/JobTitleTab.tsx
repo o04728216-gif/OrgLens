@@ -141,15 +141,67 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
       : null;
 
   const sessionEmployees = useMemo<EmployeeRecord[]>(() => {
-    if (sessionMode === 'domain' || isViewingFilterCompany) {
-      return activeSingleCompanyResult
-        ? activeSingleCompanyResult.employees
-        : [];
-    }
-    if (!filterResult) return [];
-
     const sidebarRole = filters.roleKeyword.trim().toLowerCase();
     const sidebarContact = filters.contactSearch.trim().toLowerCase();
+
+    if (sessionMode === 'domain' || isViewingFilterCompany) {
+      if (!activeSingleCompanyResult) return [];
+      const detectedId =
+        activeSingleCompanyResult.emailPattern.detectedFormulaId;
+      const formulaId =
+        filters.emailFormulaOverride !== 'auto'
+          ? filters.emailFormulaOverride
+          : detectedId;
+
+      return activeSingleCompanyResult.employees.filter((emp) => {
+        const isConfirmed = Boolean(emp.emailVerifiedOnWeb || emp.emailSource);
+        const resolvedEmail =
+          isConfirmed || formulaId === detectedId
+            ? emp.email
+            : applyExcelEmailFormula(
+                emp.fullName,
+                activeSingleCompanyResult.domain,
+                formulaId
+              );
+        const resolvedAccuracy =
+          isConfirmed || formulaId === detectedId
+            ? emp.emailAccuracy
+            : emp.email === resolvedEmail
+            ? emp.emailAccuracy
+            : Math.max(62, emp.emailAccuracy);
+
+        if (
+          resolvedAccuracy < filters.minAccuracy ||
+          resolvedAccuracy > filters.maxAccuracy
+        ) {
+          return false;
+        }
+        if (
+          filters.departments.length > 0 &&
+          !filters.departments.includes(emp.department)
+        ) {
+          return false;
+        }
+        if (
+          filters.seniorities.length > 0 &&
+          !filters.seniorities.includes(emp.seniority)
+        ) {
+          return false;
+        }
+        if (sidebarRole && !emp.jobTitle.toLowerCase().includes(sidebarRole)) {
+          return false;
+        }
+        if (
+          sidebarContact &&
+          !emp.fullName.toLowerCase().includes(sidebarContact) &&
+          !resolvedEmail.toLowerCase().includes(sidebarContact)
+        ) {
+          return false;
+        }
+        return true;
+      });
+    }
+    if (!filterResult) return [];
 
     return filterResult.employees.filter((emp) => {
       const resolvedEmail =

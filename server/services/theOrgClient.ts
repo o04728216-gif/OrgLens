@@ -619,16 +619,11 @@ export async function discoverViaTheOrg(
     .filter((s) => Boolean(s) && !triedSlugs.has(s))
     .slice(0, 2);
 
+  const metaCandidates: Array<{ slug: string; meta?: GraphQLCompanyMeta; skipGuard: boolean }> = [];
+
   for (const s of domMatchedSlugs) {
     triedSlugs.add(s);
-    const hit = await fetchFullTheOrgCompany(
-      s,
-      domain,
-      linkedinCompanySlug,
-      brandName,
-      true
-    );
-    if (hit && hit.employees.length > 0) return hit;
+    metaCandidates.push({ slug: s, skipGuard: true });
   }
 
   for (let i = 0; i < candidateSlugs.length; i++) {
@@ -646,15 +641,7 @@ export async function discoverViaTheOrg(
       continue;
     }
     triedSlugs.add(meta.slug);
-    const hit = await fetchFullTheOrgCompany(
-      meta.slug,
-      domain,
-      linkedinCompanySlug,
-      brandName,
-      true,
-      meta
-    );
-    if (hit && hit.employees.length > 0) return hit;
+    metaCandidates.push({ slug: meta.slug, meta, skipGuard: true });
   }
 
   const brandSlugs = (
@@ -666,20 +653,34 @@ export async function discoverViaTheOrg(
   )
     .map((c) => c.slug)
     .filter((s) => Boolean(s) && !triedSlugs.has(s))
-    .slice(0, 1);
+    .slice(0, 2);
 
   for (const s of brandSlugs) {
-    const hit = await fetchFullTheOrgCompany(
-      s,
-      domain,
-      linkedinCompanySlug,
-      brandName,
-      false
-    );
-    if (hit && hit.employees.length > 0) return hit;
+    triedSlugs.add(s);
+    metaCandidates.push({ slug: s, skipGuard: false });
   }
 
-  return null;
+  if (metaCandidates.length === 0) return null;
+
+  // Fire up to 3 top candidate slugs in parallel and pick the richest verified org chart!
+  const parallelHits = await Promise.all(
+    metaCandidates.slice(0, 3).map((cand) =>
+      fetchFullTheOrgCompany(
+        cand.slug,
+        domain,
+        linkedinCompanySlug,
+        brandName,
+        cand.skipGuard,
+        cand.meta
+      ).catch(() => null)
+    )
+  );
+
+  const validHits = parallelHits
+    .filter((h): h is TheOrgFullDiscovery => Boolean(h && h.employees.length > 0))
+    .sort((a, b) => b.employees.length - a.employees.length);
+
+  return validHits[0] || null;
 }
 
 /**

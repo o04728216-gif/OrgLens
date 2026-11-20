@@ -72,6 +72,7 @@ interface EmployeeTableWidgetProps {
   autoScrollOnPagination?: boolean;
   exportFilenamePrefix?: string;
   coherentMatchedOrgs?: number;
+  onResetAccuracyFilter?: () => void;
 }
 
 interface ComputedRow extends EmployeeRecord {
@@ -165,6 +166,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
   autoScrollOnPagination = true,
   exportFilenamePrefix = 'orglens',
   coherentMatchedOrgs,
+  onResetAccuracyFilter,
 }) => {
   const [internalQuery, setInternalQuery] = useState('');
   const [internalPage, setInternalPage] = useState(1);
@@ -237,15 +239,20 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     setConfirmedOnly(false);
   }, [activeSingleCompanyResult?.domain, sessionMode]);
 
+  const hasAccuracyFilterActive =
+    filters.minAccuracy > 50 || filters.maxAccuracy < 99;
+
   const baseFilteredEmployees = useMemo<ComputedRow[]>(() => {
     const qLocal = localQuery.trim().toLowerCase();
+    const qContact = filters.contactSearch.trim().toLowerCase();
+    const qRole = filters.roleKeyword.trim().toLowerCase();
 
     if (sessionMode === 'domain' || isViewingFilterCompany) {
       if (!activeSingleCompanyResult) return [];
       const detectedId =
         activeSingleCompanyResult.emailPattern.detectedFormulaId;
       const formulaId =
-        isViewingFilterCompany && filters.emailFormulaOverride !== 'auto'
+        filters.emailFormulaOverride !== 'auto'
           ? filters.emailFormulaOverride
           : detectedId;
 
@@ -261,32 +268,77 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                 activeSingleCompanyResult.domain,
                 formulaId
               );
+          const resolvedAccuracy =
+            isConfirmed || formulaId === detectedId
+              ? emp.emailAccuracy
+              : emp.email === resolvedEmail
+              ? emp.emailAccuracy
+              : Math.max(62, emp.emailAccuracy);
 
           return {
             ...emp,
             resolvedEmail,
-            resolvedAccuracy: emp.emailAccuracy,
+            resolvedAccuracy,
             displayRank: emp.rank,
           };
         })
         .filter((emp) => {
-          if (!qLocal) return true;
-          return (
-            emp.fullName.toLowerCase().includes(qLocal) ||
-            emp.resolvedEmail.toLowerCase().includes(qLocal) ||
-            emp.jobTitle.toLowerCase().includes(qLocal)
-          );
+          if (
+            emp.resolvedAccuracy < filters.minAccuracy ||
+            emp.resolvedAccuracy > filters.maxAccuracy
+          ) {
+            return false;
+          }
+          if (
+            filters.seniorities.length > 0 &&
+            !filters.seniorities.includes(emp.seniority)
+          ) {
+            return false;
+          }
+          if (
+            filters.departments.length > 0 &&
+            !filters.departments.includes(emp.department)
+          ) {
+            return false;
+          }
+          if (qRole && !emp.jobTitle.toLowerCase().includes(qRole)) {
+            return false;
+          }
+          if (
+            qContact &&
+            !emp.fullName.toLowerCase().includes(qContact) &&
+            !emp.resolvedEmail.toLowerCase().includes(qContact)
+          ) {
+            return false;
+          }
+          if (
+            qLocal &&
+            !emp.fullName.toLowerCase().includes(qLocal) &&
+            !emp.resolvedEmail.toLowerCase().includes(qLocal) &&
+            !emp.jobTitle.toLowerCase().includes(qLocal)
+          ) {
+            return false;
+          }
+          return true;
         });
+
+      const hasNarrowing = Boolean(
+        qLocal ||
+          qContact ||
+          qRole ||
+          filters.seniorities.length > 0 ||
+          filters.departments.length > 0 ||
+          filters.minAccuracy > 50 ||
+          filters.maxAccuracy < 99
+      );
 
       return rows.map((row, index) => ({
         ...row,
-        displayRank: qLocal ? index + 1 : row.rank,
+        displayRank: hasNarrowing ? index + 1 : row.rank,
       }));
     }
 
     if (!filterResult) return [];
-    const qContact = filters.contactSearch.trim().toLowerCase();
-    const qRole = filters.roleKeyword.trim().toLowerCase();
 
     const rows = filterResult.employees
       .map((emp) => {
@@ -1114,7 +1166,24 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
             </>
           )}
         </span>
-        <span className="font-mono tabular-nums whitespace-nowrap">
+        <span className="font-mono tabular-nums whitespace-nowrap flex items-center gap-2">
+          {hasAccuracyFilterActive && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-petrol-700 dark:text-lemon-300">
+              <span>
+                Accuracy {filters.minAccuracy}%–{filters.maxAccuracy}%
+              </span>
+              {onResetAccuracyFilter && (
+                <button
+                  type="button"
+                  onClick={onResetAccuracyFilter}
+                  className="underline underline-offset-2 hover:text-petrol-900 dark:hover:text-lemon-200 cursor-pointer"
+                >
+                  Reset
+                </button>
+              )}
+              <span className="text-slate-300 dark:text-slate-700">·</span>
+            </span>
+          )}
           {filteredEmployees.length === 0
             ? isFilterLoading || isServerBatchLoading
               ? `Loading page ${targetPaginationPage.toLocaleString()} (500/page)...`
@@ -1132,7 +1201,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
       {/* Contacts View: Mobile Cards (< md) + Desktop HTML <table> (md+) */}
       {filteredEmployees.length === 0 && (isFilterLoading || isServerBatchLoading) ? (
         <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80">
-          <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
+          <Loader2 className="h-5 w-5 animate-spin text-petrol-600 dark:text-lemon-300" />
           <span>
             Loading page {targetPaginationPage.toLocaleString()} contacts (500/page)...
           </span>
@@ -1142,6 +1211,10 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
             {confirmedOnly
               ? 'No confirmed emails match your current search filter.'
+              : hasAccuracyFilterActive &&
+                (sessionMode === 'domain' || isViewingFilterCompany) &&
+                (activeSingleCompanyResult?.employees.length || 0) > 0
+              ? `No contacts in this company have an Accuracy Score between ${filters.minAccuracy}% and ${filters.maxAccuracy}%.`
               : sessionMode === 'domain' || isViewingFilterCompany
               ? localQuery
                 ? 'No contacts in this company match your quick search.'
@@ -1153,6 +1226,10 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {confirmedOnly
               ? 'Switch back to All Contacts to inspect the full organization directory.'
+              : hasAccuracyFilterActive &&
+                (sessionMode === 'domain' || isViewingFilterCompany) &&
+                (activeSingleCompanyResult?.employees.length || 0) > 0
+              ? `This company has ${activeSingleCompanyResult?.employees.length.toLocaleString()} indexed contacts — lower your Accuracy Score filter to view them.`
               : sessionMode === 'domain' || isViewingFilterCompany
               ? localQuery
                 ? 'Clear the quick search input above to view the full organization roster.'
@@ -1161,6 +1238,17 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               ? 'Return to an earlier page or broaden your sidebar filters to load more verified contacts.'
               : 'Broaden your Accuracy Score, Role, Location, or Revenue selection in the left sidebar.'}
           </p>
+          {hasAccuracyFilterActive && onResetAccuracyFilter && (
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={onResetAccuracyFilter}
+                className="min-h-[38px] px-4 py-2 rounded-lg text-xs font-bold bg-lemon-400 hover:bg-lemon-300 text-petrol-950 transition-colors cursor-pointer"
+              >
+                Show All Accuracy Scores (50%–99%)
+              </button>
+            </div>
+          )}
           {sessionMode === 'filter' &&
             !isViewingFilterCompany &&
             !confirmedOnly &&
