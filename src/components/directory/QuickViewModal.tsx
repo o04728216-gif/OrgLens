@@ -1,14 +1,19 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowRight,
   Building2,
   Check,
   Copy,
+  DollarSign,
   ExternalLink,
   Globe2,
   Loader2,
+  Mail,
   MailCheck,
   MapPin,
+  Phone,
+  ShieldCheck,
   Users,
   X,
 } from 'lucide-react';
@@ -16,6 +21,7 @@ import type { GlobalCompanyItem, SearchResponse } from '../../types.ts';
 import { apiFetch } from '../../utils/authClient.ts';
 import { copyTextToClipboard } from '../../utils/offlineStorage.ts';
 import { truncateIndustry20 } from '../../utils/emailFormulas.ts';
+import { CompanyLogoAvatar } from './CompanyLogoAvatar.tsx';
 
 export type QuickViewTarget = {
   kind: 'company';
@@ -106,14 +112,14 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
         const data = await res.json();
         if (cancelled) return;
         if (!res.ok) {
-          throw new Error(data?.error || 'Could not load quick company preview.');
+          throw new Error(data?.error || 'Could not load company QuickView.');
         }
         setCompanyPreview(data as SearchResponse);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setCompanyError(
-          err instanceof Error ? err.message : 'Unable to fetch contacts preview.'
+          err instanceof Error ? err.message : 'Unable to fetch company profile.'
         );
       })
       .finally(() => {
@@ -125,148 +131,320 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
     };
   }, [target, companyDomainKey, companySlugKey, allSnapshots]);
 
-  if (!target) return null;
+  if (!target || typeof document === 'undefined') return null;
 
-  return (
+  const comp = target.company;
+  const effectiveDomain = companyPreview?.domain || comp.domain || '';
+  const effectiveWebsite =
+    comp.websiteUrl || (effectiveDomain ? `https://${effectiveDomain}` : '');
+  const effectiveLocation =
+    (companyPreview?.headquarters && companyPreview.headquarters !== 'Global'
+      ? companyPreview.headquarters
+      : '') ||
+    companyPreview?.zoomInfoIntel?.headquarters ||
+    comp.location ||
+    'Global';
+  const effectiveIndustry =
+    companyPreview?.industry ||
+    companyPreview?.zoomInfoIntel?.industry ||
+    comp.industry ||
+    'Business Services';
+  const effectiveHeadcount =
+    companyPreview?.zoomInfoIntel?.headcount ||
+    companyPreview?.employeeRange ||
+    comp.employeeRange ||
+    '—';
+  const effectiveRevenue =
+    companyPreview?.zoomInfoIntel?.revenue ||
+    companyPreview?.revenueRange ||
+    comp.revenueRange ||
+    '—';
+  const effectivePattern =
+    companyPreview?.emailPattern?.formulaLabel ||
+    comp.detectedFormulaLabel ||
+    'Auto-detecting...';
+  const effectivePatternConf =
+    companyPreview?.emailPattern?.patternConfidence ?? comp.patternConfidence;
+  const effectiveMxProvider = companyPreview?.emailPattern?.mxProvider || '';
+  const confirmedCount =
+    companyPreview?.confirmedEmailsCount ?? comp.confirmedEmailCount ?? 0;
+  const zoomInfo = companyPreview?.zoomInfoIntel;
+  const previewEmployees = companyPreview?.employees || [];
+  const allPreviewEmails = previewEmployees
+    .map((e) => e.email)
+    .filter((e): e is string => Boolean(e && e.includes('@')));
+
+  const sidebarContent = (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`Company quick view: ${target.company.name}`}
-      className="fixed inset-0 z-50 flex justify-end bg-slate-950/55 backdrop-blur-xs animate-in fade-in duration-150"
+      aria-label={`Company QuickView sidebar: ${comp.name}`}
+      className="fixed inset-0 z-[70] flex justify-end bg-petrol-950/50 backdrop-blur-[2px] animate-in fade-in duration-150"
       onClick={onClose}
     >
-      <div
-        className="relative w-full max-w-lg h-full bg-bone-50 dark:bg-petrol-950 border-l border-bone-300 dark:border-petrol-700 shadow-2xl flex flex-col overflow-hidden"
+      <aside
+        className="relative w-full max-w-[460px] h-full bg-bone-50 dark:bg-petrol-950 border-l border-petrol-700/25 dark:border-petrol-700 shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Right-Side Drawer Header — Petrol Blue Anchor */}
-        <div className="shrink-0 px-4 py-3.5 border-b border-petrol-600/80 flex items-start justify-between gap-2.5 bg-petrol-700 text-bone-50">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-lemon-300">
-              <Building2 className="h-3.5 w-3.5" />
-              <span>Company QuickView</span>
-            </div>
-            <h3 className="mt-0.5 text-base font-bold text-bone-50 truncate">
-              {target.company.name}
-            </h3>
-            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-bone-200/85">
-              {target.company.domain && (
-                <a
-                  href={
-                    target.company.websiteUrl ||
-                    `https://${target.company.domain}`
-                  }
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-mono text-lemon-300 hover:underline inline-flex items-center gap-1"
-                >
-                  <Globe2 className="h-3 w-3" />
-                  <span>{target.company.domain}</span>
-                  <ExternalLink className="h-2.5 w-2.5" />
-                </a>
-              )}
-              {target.company.location && (
-                <span className="inline-flex items-center gap-1 truncate max-w-[220px]">
-                  <MapPin className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{target.company.location}</span>
-                </span>
-              )}
-            </div>
-          </div>
+        {/* Top Petrol Blue Anchor Header */}
+        <div className="shrink-0 px-4 py-3.5 border-b border-petrol-600/80 bg-petrol-800 text-bone-50">
+          <div className="flex items-start justify-between gap-2.5">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="mt-0.5 shrink-0 rounded-lg bg-bone-50 p-0.5 shadow-xs">
+                <CompanyLogoAvatar name={comp.name} logoUrl={comp.logoUrl} />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-lemon-300">
+                    <Building2 className="h-3 w-3" />
+                    <span>Company QuickView</span>
+                  </span>
+                  {zoomInfo?.profileUrl && (
+                    <a
+                      href={zoomInfo.profileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-petrol-700 hover:bg-petrol-600 text-[10px] font-semibold text-lemon-300 border border-lemon-400/30 transition-colors"
+                    >
+                      <span>ZoomInfo</span>
+                      <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  )}
+                </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close QuickView"
-            className="p-1.5 rounded-lg text-bone-200 hover:text-bone-50 hover:bg-petrol-600 cursor-pointer shrink-0"
-          >
-            <X className="h-4 w-4" />
-          </button>
+                <h3 className="mt-0.5 text-base font-bold text-bone-50 leading-snug truncate">
+                  {companyPreview?.companyName || comp.name}
+                </h3>
+
+                <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-bone-200/90">
+                  {effectiveDomain && (
+                    <span className="inline-flex items-center gap-1">
+                      <a
+                        href={effectiveWebsite}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-lemon-300 hover:underline inline-flex items-center gap-1"
+                      >
+                        <Globe2 className="h-3 w-3 shrink-0" />
+                        <span className="truncate max-w-[165px]">
+                          {effectiveDomain}
+                        </span>
+                        <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void triggerCopy('qv-domain', effectiveDomain)
+                        }
+                        aria-label="Copy domain"
+                        className="p-0.5 rounded hover:bg-petrol-700 text-bone-200 hover:text-lemon-300 cursor-pointer"
+                      >
+                        {copiedId === 'qv-domain' ? (
+                          <Check className="h-3 w-3 text-emerald-300" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )}
+                      </button>
+                    </span>
+                  )}
+
+                  <span className="inline-flex items-center gap-1 truncate max-w-[205px]">
+                    <MapPin className="h-3 w-3 shrink-0 text-bone-300" />
+                    <span className="truncate" title={effectiveLocation}>
+                      {effectiveLocation}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close Sidebar QuickView"
+              className="p-1.5 rounded-lg text-bone-200 hover:text-bone-50 hover:bg-petrol-700 cursor-pointer shrink-0 transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Scroll-Free Compact Drawer Body (Footer Pinned Always Visible Below) */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-lg px-2.5 py-2 border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/70 dark:bg-slate-900/50">
-              <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                Headcount
+        {/* All-at-One-Glance Scrollable Body */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3.5 space-y-3.5">
+          {/* 2x2 Key Firmographics & Email Intel Grid */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-xl px-3 py-2.5 border border-bone-300/90 dark:border-petrol-800 bg-white dark:bg-petrol-900/60">
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-bone-400">
+                <Users className="h-3 w-3 text-petrol-700 dark:text-lemon-400" />
+                <span>Headcount</span>
               </div>
-              <div className="mt-0.5 text-xs font-bold font-mono tabular-nums text-slate-900 dark:text-white truncate">
-                {target.company.employeeRange || '—'}
-              </div>
-            </div>
-            <div className="rounded-lg px-2.5 py-2 border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/70 dark:bg-slate-900/50">
-              <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                Est. Revenue
-              </div>
-              <div className="mt-0.5 text-xs font-bold font-mono tabular-nums text-slate-900 dark:text-white truncate">
-                {target.company.revenueRange || '—'}
-              </div>
-            </div>
-            <div className="rounded-lg px-2.5 py-2 border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/70 dark:bg-slate-900/50">
-              <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                Industry
+              <div className="mt-1 text-xs font-bold font-mono tabular-nums text-petrol-950 dark:text-bone-50 truncate">
+                {effectiveHeadcount}
               </div>
               <div
-                className="mt-0.5 text-xs font-semibold text-slate-900 dark:text-white truncate"
-                title={target.company.industry}
+                className="mt-0.5 text-[10px] text-slate-500 dark:text-bone-400 truncate"
+                title={effectiveIndustry}
               >
-                {truncateIndustry20(target.company.industry || 'Global B2B')}
+                {truncateIndustry20(effectiveIndustry)}
+              </div>
+            </div>
+
+            <div className="rounded-xl px-3 py-2.5 border border-bone-300/90 dark:border-petrol-800 bg-white dark:bg-petrol-900/60">
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-bone-400">
+                <DollarSign className="h-3 w-3 text-petrol-700 dark:text-lemon-400" />
+                <span>Est. Revenue</span>
+              </div>
+              <div className="mt-1 text-xs font-bold font-mono tabular-nums text-petrol-950 dark:text-bone-50 truncate">
+                {effectiveRevenue}
+              </div>
+              {zoomInfo?.phone ? (
+                <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-mono text-petrol-700 dark:text-lemon-300 truncate max-w-full">
+                  <Phone className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{zoomInfo.phone}</span>
+                </div>
+              ) : (
+                <div className="mt-0.5 text-[10px] text-slate-500 dark:text-bone-400 truncate">
+                  {comp.sourceRegistry || 'Verified Directory'}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl px-3 py-2.5 border border-bone-300/90 dark:border-petrol-800 bg-white dark:bg-petrol-900/60">
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-bone-400">
+                <Mail className="h-3 w-3 text-petrol-700 dark:text-lemon-400" />
+                <span>Email Pattern</span>
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 min-w-0">
+                <span className="text-xs font-bold font-mono text-petrol-950 dark:text-bone-50 truncate">
+                  {effectivePattern}
+                </span>
+                {typeof effectivePatternConf === 'number' && (
+                  <span className="text-[10px] font-mono font-bold text-emerald-700 dark:text-emerald-400 shrink-0">
+                    {effectivePatternConf}%
+                  </span>
+                )}
+              </div>
+              <div className="mt-0.5 text-[10px] text-slate-500 dark:text-bone-400 truncate">
+                {effectiveMxProvider || 'DNS MX Ready'}
+              </div>
+            </div>
+
+            <div className="rounded-xl px-3 py-2.5 border border-bone-300/90 dark:border-petrol-800 bg-white dark:bg-petrol-900/60">
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-bone-400">
+                <ShieldCheck className="h-3 w-3 text-petrol-700 dark:text-lemon-400" />
+                <span>Indexed Roster</span>
+              </div>
+              <div className="mt-1 text-xs font-bold font-mono tabular-nums text-petrol-950 dark:text-bone-50 truncate">
+                {isLoadingCompany
+                  ? 'Scanning...'
+                  : `${previewEmployees.length.toLocaleString()} contacts`}
+              </div>
+              <div className="mt-0.5 text-[10px] text-emerald-700 dark:text-emerald-400 font-medium truncate">
+                {confirmedCount > 0
+                  ? `${confirmedCount.toLocaleString()} web-confirmed emails`
+                  : 'Pattern-calibrated work emails'}
               </div>
             </div>
           </div>
 
-          {companyPreview?.companyDescription && (
-            <p className="text-[11px] leading-snug text-slate-600 dark:text-slate-300 bg-slate-50/60 dark:bg-slate-900/40 px-2.5 py-2 rounded-lg border border-slate-200/70 dark:border-slate-800/70 line-clamp-2">
-              {companyPreview.companyDescription}
+          {/* Company Description / ZoomInfo Summary */}
+          {(companyPreview?.companyDescription || zoomInfo?.summary) && (
+            <p className="text-[11px] leading-relaxed text-slate-700 dark:text-bone-200 bg-white/90 dark:bg-petrol-900/50 px-3 py-2.5 rounded-xl border border-bone-300/80 dark:border-petrol-800 line-clamp-3">
+              {companyPreview?.companyDescription || zoomInfo?.summary}
             </p>
           )}
 
-          {/* Leadership & Work Emails Snapshot */}
-          <div className="space-y-1.5">
+          {/* Department Breakdown At-a-Glance */}
+          {companyPreview && companyPreview.departmentBreakdown.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-bone-400">
+                Department Breakdown
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {companyPreview.departmentBreakdown.slice(0, 6).map((dept) => (
+                  <span
+                    key={dept.department}
+                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-medium bg-white dark:bg-petrol-900 border border-bone-300/90 dark:border-petrol-700 text-petrol-900 dark:text-bone-200"
+                  >
+                    <span>{dept.department}</span>
+                    <span className="font-mono tabular-nums text-[10px] font-bold text-petrol-700 dark:text-lemon-400">
+                      {dept.count}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top Leadership & Direct Emails */}
+          <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <h4 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                Key Leadership &amp; Work Emails
+              <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-bone-400">
+                Top Decision-Makers &amp; Emails
               </h4>
-              {companyPreview && (
-                <span className="text-[11px] font-mono tabular-nums text-sky-600 dark:text-sky-400 font-semibold">
-                  {companyPreview.employees.length.toLocaleString()} indexed
-                </span>
+              {allPreviewEmails.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void triggerCopy(
+                      'qv-all-emails',
+                      allPreviewEmails.join('\n')
+                    )
+                  }
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-petrol-700 dark:text-lemon-300 hover:underline cursor-pointer"
+                >
+                  {copiedId === 'qv-all-emails' ? (
+                    <>
+                      <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                      <span>Copied {allPreviewEmails.length}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      <span>Copy all ({allPreviewEmails.length})</span>
+                    </>
+                  )}
+                </button>
               )}
             </div>
 
             {isLoadingCompany ? (
-              <div className="py-8 flex flex-col items-center justify-center gap-2 rounded-lg border border-slate-200/80 dark:border-slate-800/80 text-xs text-slate-500 dark:text-slate-400">
-                <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400" />
-                <span>Scanning team roster &amp; live web emails...</span>
+              <div className="py-8 flex flex-col items-center justify-center gap-2 rounded-xl border border-bone-300/90 dark:border-petrol-800 bg-white/80 dark:bg-petrol-900/40 text-xs text-slate-600 dark:text-bone-300">
+                <Loader2 className="h-5 w-5 animate-spin text-petrol-700 dark:text-lemon-400" />
+                <span className="font-medium">
+                  Extracting Org Chart, ZoomInfo &amp; live web emails...
+                </span>
               </div>
             ) : companyError ? (
-              <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-300">
+              <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-300">
                 {companyError}
               </div>
-            ) : companyPreview && companyPreview.employees.length > 0 ? (
-              <div className="divide-y divide-slate-200/70 dark:divide-slate-800/70 rounded-lg border border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-slate-900/45 overflow-hidden">
-                {companyPreview.employees.slice(0, 6).map((emp) => {
+            ) : previewEmployees.length > 0 ? (
+              <div className="divide-y divide-bone-200 dark:divide-petrol-800 rounded-xl border border-bone-300/90 dark:border-petrol-800 bg-white dark:bg-petrol-900/55 overflow-hidden">
+                {previewEmployees.slice(0, 8).map((emp) => {
                   const rowCopied = copiedId === `qv-emp:${emp.id}`;
                   return (
                     <div
                       key={emp.id}
-                      className="px-3 py-2 flex items-center justify-between gap-2"
+                      className="px-3 py-2.5 flex items-center justify-between gap-2 hover:bg-bone-100/70 dark:hover:bg-petrol-800/50 transition-colors"
                     >
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1">
-                          <span className="font-semibold text-xs text-slate-900 dark:text-white truncate">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-xs text-petrol-950 dark:text-bone-50 truncate">
                             {emp.fullName}
                           </span>
                           {emp.emailVerifiedOnWeb && (
-                            <MailCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                            <MailCheck
+                              className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0"
+                              aria-label="Verified on public web"
+                            />
                           )}
-                          <span className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                            · {emp.jobTitle}
-                          </span>
                         </div>
+                        <p className="text-[11px] text-slate-600 dark:text-bone-300 truncate">
+                          {emp.jobTitle}
+                        </p>
                         {emp.email && (
-                          <p className="font-mono text-[11px] text-sky-700 dark:text-sky-300 break-all">
+                          <p className="mt-0.5 font-mono text-[11px] text-petrol-700 dark:text-lemon-300 break-all">
                             {emp.email}
                           </p>
                         )}
@@ -278,13 +456,13 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                           onClick={() =>
                             void triggerCopy(`qv-emp:${emp.id}`, emp.email)
                           }
-                          className={`px-2 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer shrink-0 ${
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold font-mono border transition-colors cursor-pointer shrink-0 ${
                             rowCopied
                               ? 'border-emerald-600 bg-emerald-600 text-white'
-                              : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:border-sky-500/50'
+                              : 'border-bone-300 dark:border-petrol-700 bg-bone-50 dark:bg-petrol-950 text-petrol-900 dark:text-bone-100 hover:border-petrol-600 dark:hover:border-lemon-400'
                           }`}
                         >
-                          {rowCopied ? 'Copied' : `${emp.emailAccuracy}% Copy`}
+                          {rowCopied ? 'Copied' : `${emp.emailAccuracy}%`}
                         </button>
                       )}
                     </div>
@@ -292,44 +470,59 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                 })}
               </div>
             ) : (
-              <div className="p-3 rounded-lg border border-slate-200/80 dark:border-slate-800/80 text-xs text-slate-500 dark:text-slate-400">
-                Click &ldquo;Open Full Roster&rdquo; below to run a live web crawl for this organization.
+              <div className="p-3.5 rounded-xl border border-bone-300/90 dark:border-petrol-800 bg-white/80 dark:bg-petrol-900/40 text-xs text-slate-600 dark:text-bone-300">
+                Click &ldquo;Open Full Roster&rdquo; below to run a deep multi-source crawl for this organization.
               </div>
             )}
           </div>
         </div>
 
-        {/* Pinned Always-Visible Right-Side Drawer Footer */}
-        <div className="shrink-0 px-4 py-3 border-t border-slate-200/80 dark:border-slate-800/80 bg-slate-50/90 dark:bg-slate-900/75 flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() =>
-              void triggerCopy(
-                'qv-comp-web',
-                target.company.websiteUrl ||
-                  `https://${target.company.domain}`
-              )
-            }
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
-          >
-            {copiedId === 'qv-comp-web' ? (
-              <Check className="h-3.5 w-3.5 text-emerald-500" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
+        {/* Pinned Always-Visible Sidebar Footer */}
+        <div className="shrink-0 px-4 py-3 border-t border-bone-300 dark:border-petrol-800 bg-bone-100/95 dark:bg-petrol-900/90 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                void triggerCopy('qv-comp-web', effectiveWebsite)
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-bone-300 dark:border-petrol-700 bg-white dark:bg-petrol-950 text-petrol-900 dark:text-bone-100 hover:bg-bone-50 dark:hover:bg-petrol-800 cursor-pointer transition-colors"
+            >
+              {copiedId === 'qv-comp-web' ? (
+                <Check className="h-3.5 w-3.5 text-emerald-500" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+              <span>{copiedId === 'qv-comp-web' ? 'Copied' : 'Website'}</span>
+            </button>
+
+            {allPreviewEmails.length > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  void triggerCopy('qv-footer-emails', allPreviewEmails.join('\n'))
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-bone-300 dark:border-petrol-700 bg-white dark:bg-petrol-950 text-petrol-900 dark:text-bone-100 hover:bg-bone-50 dark:hover:bg-petrol-800 cursor-pointer transition-colors"
+              >
+                {copiedId === 'qv-footer-emails' ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-500" />
+                ) : (
+                  <Mail className="h-3.5 w-3.5" />
+                )}
+                <span>
+                  {copiedId === 'qv-footer-emails' ? 'Copied' : 'Emails'}
+                </span>
+              </button>
             )}
-            <span>
-              {copiedId === 'qv-comp-web' ? 'Copied' : 'Copy Website'}
-            </span>
-          </button>
+          </div>
 
           {onOpenFullCompany && (
             <button
               type="button"
               onClick={() => {
                 onClose();
-                onOpenFullCompany(target.company);
+                onOpenFullCompany(comp);
               }}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-lemon-400 hover:bg-lemon-300 text-petrol-950 border border-lemon-500/40 shadow-xs transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-lemon-400 hover:bg-lemon-300 text-petrol-950 border border-lemon-500/50 shadow-xs transition-colors cursor-pointer"
             >
               <Users className="h-3.5 w-3.5" />
               <span>Open Full Roster</span>
@@ -337,7 +530,9 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
             </button>
           )}
         </div>
-      </div>
+      </aside>
     </div>
   );
+
+  return createPortal(sidebarContent, document.body);
 };

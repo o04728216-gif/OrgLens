@@ -113,12 +113,14 @@ const bootstrapPromise = (async () => {
         const [
           { startWorldwideCrawlerDaemon },
           { fetchGlobalIndustries, resolveFilteredGlobalCompanies },
+          { buildColumnarFacetIndexAsync },
           { fetchQuickCompanyRoster },
           { detectBatchCompanyEmailPatterns },
           { isValidDomain, mapWithConcurrency },
         ] = await Promise.all([
           import('./server/services/worldwideCrawlerDaemon.ts'),
           import('./server/services/globalDirectoryService.ts'),
+          import('./server/services/columnarFacetEngine.ts'),
           import('./server/services/filterExplorerService.ts'),
           import('./server/services/emailIntelligence.ts'),
           import('./server/utils/textAndDomain.ts'),
@@ -126,21 +128,21 @@ const bootstrapPromise = (async () => {
 
         startWorldwideCrawlerDaemon();
 
-        const [dir] = await Promise.all([
-          resolveFilteredGlobalCompanies({
-            rawSlugs: [],
-            industryMatchMode: 'any',
-            industryKeyword: '',
-            selectedCountries: [],
-            selectedContinents: [],
-            locationQuery: '',
-            employeeRanges: [],
-            revenueRanges: [],
-            companyQuery: '',
-            page: 1,
-          }),
-          fetchGlobalIndustries(),
-        ]);
+        const industries = await fetchGlobalIndustries();
+        await buildColumnarFacetIndexAsync(industries);
+
+        const dir = await resolveFilteredGlobalCompanies({
+          rawSlugs: [],
+          industryMatchMode: 'any',
+          industryKeyword: '',
+          selectedCountries: [],
+          selectedContinents: [],
+          locationQuery: '',
+          employeeRanges: [],
+          revenueRanges: [],
+          companyQuery: '',
+          page: 1,
+        });
 
         await new Promise((resolve) => setTimeout(resolve, 10_000));
         const topCompanies = dir.companies

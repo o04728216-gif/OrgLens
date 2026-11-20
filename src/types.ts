@@ -19,12 +19,23 @@ export type SeniorityLevel =
 export type DiscoverySource =
   | 'Org Chart'
   | 'LinkedIn Index'
+  | 'ZoomInfo Index'
   | 'Company Site'
   | 'Public Web Verified'
   | 'GitHub Commit'
   | 'OpenPGP Keyserver'
   | 'NPM Registry'
   | 'Business Registry';
+
+export interface ZoomInfoCompanyIntel {
+  profileUrl?: string;
+  headquarters?: string;
+  phone?: string;
+  revenue?: string;
+  headcount?: string;
+  industry?: string;
+  summary?: string;
+}
 
 export type ConfirmedEmailSource =
   | 'Company Website'
@@ -90,6 +101,7 @@ export interface SearchResponse {
   headquarters: string;
   employeeRange?: string;
   revenueRange?: string;
+  zoomInfoIntel?: ZoomInfoCompanyIntel;
   emailPattern: EmailPatternAnalysis;
   sourcesUsed: DiscoverySource[];
   confirmedEmailsCount?: number;

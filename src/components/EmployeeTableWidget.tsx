@@ -32,6 +32,7 @@ import { copyTextToClipboard, exportEmployeesToCsv } from '../utils/offlineStora
 import { scrollToListTop } from '../utils/scrollUtils';
 import { CompanyDrilldownHeader } from './directory/CompanyDrilldownHeader';
 import {
+  FilterUpdatingBanner,
   PaginationControls,
   PaginationLoadingBanner,
 } from './directory/PaginationControls';
@@ -1274,7 +1275,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
         </div>
       ) : (
         <div className="space-y-3">
-          {isPaginationLoading && (
+          {isPaginationLoading ? (
             <PaginationLoadingBanner
               message={`Loading page ${targetPaginationPage.toLocaleString()} of ${totalPages.toLocaleString()}...`}
               rightMeta={
@@ -1283,15 +1284,44 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                   : 'Loading 500 contacts'
               }
             />
-          )}
+          ) : isFilterLoading && sessionMode === 'filter' && !isViewingFilterCompany ? (
+            <FilterUpdatingBanner
+              label="Updating Full Names & Emails..."
+              filterSummary={[
+                filters.minAccuracy > 50 || filters.maxAccuracy < 99
+                  ? `Accuracy ${filters.minAccuracy}%–${filters.maxAccuracy}%`
+                  : '',
+                ...filters.employeeRanges,
+                ...filters.seniorities.slice(0, 2),
+                ...filters.selectedCountries.slice(0, 2),
+              ]
+                .filter(Boolean)
+                .slice(0, 4)
+                .join(' · ')}
+            />
+          ) : null}
           <motion.div
             key={`contacts-${renderedContactsPageKey}`}
             initial={{ opacity: 0, y: pageTransitionDir > 0 ? 14 : -10 }}
-            animate={{ opacity: isPaginationLoading ? 0.55 : 1, y: 0 }}
-            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-            aria-busy={isPaginationLoading}
+            animate={{
+              opacity:
+                isPaginationLoading ||
+                (isFilterLoading &&
+                  sessionMode === 'filter' &&
+                  !isViewingFilterCompany)
+                  ? 0.45
+                  : 1,
+              y: 0,
+            }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            aria-busy={isPaginationLoading || isFilterLoading}
             className={`relative ${
-              isPaginationLoading ? 'pointer-events-none' : ''
+              isPaginationLoading ||
+              (isFilterLoading &&
+                sessionMode === 'filter' &&
+                !isViewingFilterCompany)
+                ? 'pointer-events-none'
+                : ''
             }`}
           >
             {/* Mobile Touch Cards (md:hidden) — Full unshortened email display */}
@@ -1307,7 +1337,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               return (
                 <div
                   key={emp.id}
-                  className="rounded-xl p-3.5 border border-slate-200/85 dark:border-slate-800/85 bg-white/85 dark:bg-slate-950/55 space-y-2.5"
+                  className="rounded-xl p-3.5 border border-slate-200/85 dark:border-slate-800/85 bg-white/85 dark:bg-slate-950/55 space-y-2.5 [content-visibility:auto] [contain-intrinsic-size:132px]"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -1451,7 +1481,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
                   return (
                     <tr
                       key={emp.id}
-                      className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
+                      className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:48px]"
                     >
                       <td className="py-2 px-3 font-mono tabular-nums text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
                         {emp.displayRank}

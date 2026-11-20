@@ -132,16 +132,58 @@ export const PaginationLoadingBanner: React.FC<{
   <div
     role="status"
     aria-live="polite"
-    className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-sky-500/40 bg-sky-500/10 dark:bg-sky-500/15 text-xs font-semibold text-sky-800 dark:text-sky-200"
+    className="sticky top-[68px] z-20 overflow-hidden rounded-xl border border-petrol-700 bg-petrol-900 text-bone-50 shadow-lg shadow-petrol-950/20"
   >
-    <span className="inline-flex items-center gap-2">
-      <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
-      <span>{message}</span>
-    </span>
-    {rightMeta ? (
-      <span className="font-mono tabular-nums text-[11px] text-sky-700/85 dark:text-sky-300/85">
-        {rightMeta}
+    <div className="h-1 w-full bg-petrol-800 overflow-hidden">
+      <div className="h-full w-1/2 bg-lemon-400 animate-[pulse_0.9s_ease-in-out_infinite] rounded-r-full" />
+    </div>
+    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-xs font-semibold">
+      <span className="inline-flex items-center gap-2.5">
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-lemon-400/15 text-lemon-400 shrink-0">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        </span>
+        <span className="tracking-tight">{message}</span>
       </span>
-    ) : null}
+      {rightMeta ? (
+        <span className="font-mono tabular-nums text-[11px] text-lemon-300">
+          {rightMeta}
+        </span>
+      ) : null}
+    </div>
+  </div>
+);
+
+export const FilterUpdatingBanner: React.FC<{
+  label?: string;
+  filterSummary?: string;
+}> = ({ label = 'Updating filtered results...', filterSummary }) => (
+  <div
+    role="status"
+    aria-live="polite"
+    className="sticky top-[68px] z-20 overflow-hidden rounded-xl border border-petrol-700 dark:border-lemon-400/40 bg-petrol-900 text-bone-50 shadow-lg shadow-petrol-950/25"
+  >
+    <div className="relative h-1 w-full bg-petrol-800 overflow-hidden">
+      <div className="absolute inset-y-0 left-0 w-2/5 bg-gradient-to-r from-lemon-300 via-lemon-400 to-lemon-300 animate-[bounce_0.85s_linear_infinite]" />
+    </div>
+    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-lemon-400 text-petrol-950 shrink-0">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        </span>
+        <span className="text-xs sm:text-sm font-bold tracking-tight text-bone-50">
+          {label}
+        </span>
+      </div>
+      {filterSummary ? (
+        <span className="text-[11px] font-mono text-lemon-300 truncate max-w-full sm:max-w-[380px]">
+          {filterSummary}
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-mono text-lemon-300">
+          <span className="h-2 w-2 rounded-full bg-lemon-400 animate-ping" />
+          Syncing exact matches
+        </span>
+      )}
+    </div>
   </div>
 );

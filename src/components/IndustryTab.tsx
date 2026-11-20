@@ -27,6 +27,7 @@ import { scrollToListTop } from '../utils/scrollUtils';
 import { CompanyLogoAvatar } from './directory/CompanyLogoAvatar';
 import { DomainIndustryProfile } from './directory/DomainIndustryProfile';
 import {
+  FilterUpdatingBanner,
   PaginationControls,
   PaginationLoadingBanner,
 } from './directory/PaginationControls';
@@ -225,12 +226,13 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
       Boolean(comp.domain && comp.domain.includes('.'))
     );
 
-    // Apply immediate client-side narrowing ONLY on filter changes (never during pagination turns!)
+    // ALWAYS enforce strict Employee Count, Revenue, and Geography matching client-side too
+    // so mismatched rows can NEVER appear for even a single frame during filter changes!
     const isPagingNow =
       requestedPage !== null ||
       (globalDirectoryLoading && activeDirectorySource.page !== globalPage);
 
-    if (globalDirectoryLoading && !isPagingNow) {
+    if (!isPagingNow) {
       const nameQ = filters.companyNameFilter.trim().toLowerCase();
       const indQ = filters.industryKeyword.trim().toLowerCase();
       const locQ = filters.locationQuery.trim();
@@ -240,13 +242,19 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
         Boolean(locQ);
 
       realDomainRows = realDomainRows.filter((comp) => {
-        if (nameQ) {
-          const hay = `${comp.name} ${comp.domain || ''} ${comp.slug || ''}`.toLowerCase();
-          if (!hay.includes(nameQ)) return false;
+        if (
+          filters.employeeRanges.length > 0 &&
+          (!comp.employeeRange ||
+            !filters.employeeRanges.includes(comp.employeeRange))
+        ) {
+          return false;
         }
-        if (indQ) {
-          const indHay = `${comp.industry || ''} ${comp.name}`.toLowerCase();
-          if (!indHay.includes(indQ)) return false;
+        if (
+          filters.revenueRanges.length > 0 &&
+          (!comp.revenueRange ||
+            !filters.revenueRanges.includes(comp.revenueRange))
+        ) {
+          return false;
         }
         if (hasGeo) {
           if (
@@ -255,25 +263,20 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
               filters.selectedContinents,
               filters.selectedCountries,
               locQ,
-              comp.sourceCountrySlug
+              comp.sourceCountrySlug,
+              comp.domain
             )
           ) {
             return false;
           }
         }
-        if (
-          filters.employeeRanges.length > 0 &&
-          comp.employeeRange &&
-          !filters.employeeRanges.includes(comp.employeeRange)
-        ) {
-          return false;
+        if (globalDirectoryLoading && nameQ) {
+          const hay = `${comp.name} ${comp.domain || ''} ${comp.slug || ''}`.toLowerCase();
+          if (!hay.includes(nameQ)) return false;
         }
-        if (
-          filters.revenueRanges.length > 0 &&
-          comp.revenueRange &&
-          !filters.revenueRanges.includes(comp.revenueRange)
-        ) {
-          return false;
+        if (globalDirectoryLoading && indQ) {
+          const indHay = `${comp.industry || ''} ${comp.name}`.toLowerCase();
+          if (!indHay.includes(indQ)) return false;
         }
         return true;
       });
@@ -317,11 +320,26 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   ]);
 
   const effectiveTotalCompanies = useMemo(() => {
+    const hasFreeText = Boolean(
+      filters.companyNameFilter.trim() ||
+        filters.locationQuery.trim() ||
+        filters.industryKeyword.trim()
+    );
+    if (hasFreeText && activeDirectorySource) {
+      return activeDirectorySource.totalCompanies;
+    }
     if (coherentTotalCompanies > 0) return coherentTotalCompanies;
     if (filterFacets) return filterFacets.totalMatchedCompanies;
     if (activeDirectorySource) return activeDirectorySource.totalCompanies;
     return 0;
-  }, [coherentTotalCompanies, filterFacets, activeDirectorySource]);
+  }, [
+    coherentTotalCompanies,
+    filterFacets,
+    activeDirectorySource,
+    filters.companyNameFilter,
+    filters.locationQuery,
+    filters.industryKeyword,
+  ]);
 
   const hasNonIndustryScopeFilters = Boolean(
     filters.selectedContinents.length > 0 ||
@@ -362,12 +380,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   );
 
   const coherentTotalPages = useMemo(() => {
-    if (
-      activeDirectorySource &&
-      (hasFreeTextSearch ||
-        (activeDirectorySource.page === globalPage &&
-          activeDirectorySource.companies.length < 500))
-    ) {
+    if (hasFreeTextSearch && activeDirectorySource) {
       return Math.max(1, activeDirectorySource.totalPages || 1);
     }
     if (effectiveTotalCompanies === 0) return 1;
@@ -375,7 +388,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
       1,
       Math.min(20000, Math.ceil(effectiveTotalCompanies / 500))
     );
-  }, [hasFreeTextSearch, activeDirectorySource, globalPage, effectiveTotalCompanies]);
+  }, [hasFreeTextSearch, activeDirectorySource, effectiveTotalCompanies]);
 
   const topIndustriesQuickBar = useMemo(
     () => globalIndustries.slice(0, 8),
@@ -438,11 +451,11 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   return (
     <div ref={listTopRef} className="space-y-4 scroll-mt-24">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/80 dark:border-slate-800/80">
-        <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white min-w-0">
-          <Globe2 className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0" />
+        <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-petrol-900 dark:text-bone-50 min-w-0">
+          <Globe2 className="h-4 w-4 text-petrol-700 dark:text-lemon-400 shrink-0" />
           <span>Filter Explorer · Worldwide Companies</span>
           {globalDirectoryLoading && !isPaginationLoading && (
-            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-600 dark:text-sky-400">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-lemon-400 text-petrol-950 text-[11px] font-bold shadow-xs">
               <Loader2 className="h-3 w-3 animate-spin" />
               <span>Updating...</span>
             </span>
@@ -577,8 +590,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
             onClick={() => onSelectIndustrySlug(null)}
             className={`min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               filters.selectedIndustrySlugs.length === 0
-                ? 'border-sky-600 bg-sky-600 text-white'
-                : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-300 hover:border-sky-500/40'
+                ? 'border-petrol-700 bg-petrol-700 text-bone-50 dark:border-lemon-400 dark:bg-lemon-400 dark:text-petrol-950 font-semibold'
+                : 'border-bone-300 dark:border-petrol-700 bg-bone-50/90 dark:bg-petrol-900/70 text-petrol-900 dark:text-bone-200 hover:border-petrol-500 dark:hover:border-lemon-400/60'
             }`}
           >
             <span>
@@ -590,8 +603,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                 <span
                   className={`ml-1.5 font-mono tabular-nums ${
                     filters.selectedIndustrySlugs.length === 0
-                      ? 'text-sky-100'
-                      : 'text-slate-400 dark:text-slate-500'
+                      ? 'text-lemon-300 dark:text-petrol-900'
+                      : 'text-slate-400 dark:text-bone-400'
                   }`}
                 >
                   {compactAllScopeLabel}
@@ -611,8 +624,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                 onClick={() => onSelectIndustrySlug(ind.slug)}
                 className={`min-h-[38px] sm:min-h-0 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   active
-                    ? 'border-sky-600 bg-sky-600 text-white'
-                    : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-300 hover:border-sky-500/40'
+                    ? 'border-petrol-700 bg-petrol-700 text-bone-50 dark:border-lemon-400 dark:bg-lemon-400 dark:text-petrol-950 font-semibold'
+                    : 'border-bone-300 dark:border-petrol-700 bg-bone-50/90 dark:bg-petrol-900/70 text-petrol-900 dark:text-bone-200 hover:border-petrol-500 dark:hover:border-lemon-400/60'
                 }`}
               >
                 <span>{truncateIndustry20(ind.fullTitle)}</span>
@@ -620,8 +633,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                   <span
                     className={`ml-1.5 font-mono tabular-nums ${
                       active
-                        ? 'text-sky-100'
-                        : 'text-slate-400 dark:text-slate-500'
+                        ? 'text-lemon-300 dark:text-petrol-900'
+                        : 'text-slate-400 dark:text-bone-400'
                     }`}
                   >
                     {liveCount.toLocaleString()}
@@ -633,15 +646,35 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
         </div>
       )}
 
+      {/* Sticky, High-Visibility Filter Updating Bar (always visible even when scrolled down!) */}
+      {globalDirectoryLoading && !isPaginationLoading && !isDirectoryBusy && (
+        <FilterUpdatingBanner
+          label="Updating companies list..."
+          filterSummary={[
+            ...filters.employeeRanges,
+            ...filters.revenueRanges,
+            ...filters.selectedCountries.slice(0, 2),
+            ...filters.selectedContinents.slice(0, 2),
+            filters.companyNameFilter.trim(),
+            filters.locationQuery.trim(),
+          ]
+            .filter(Boolean)
+            .slice(0, 4)
+            .join(' · ')}
+        />
+      )}
+
       {/* Worldwide Companies: Mobile Touch Cards (md:hidden) + Desktop HTML <table> (hidden md:block) */}
       {isDirectoryBusy ||
       (globalDirectoryLoading && filteredGlobalCompanies.length === 0) ? (
-        <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80">
-          <Loader2 className="h-5 w-5 animate-spin text-sky-600 dark:text-sky-400" />
-          <span>
+        <div className="py-12 flex flex-col items-center justify-center gap-3 text-xs font-medium text-petrol-900 dark:text-bone-200 rounded-xl border border-petrol-300/80 dark:border-petrol-700/80 bg-bone-50/90 dark:bg-petrol-950/60">
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-petrol-800 text-lemon-400 shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </span>
+          <span className="font-semibold">
             {isPaginationLoading
               ? `Loading page ${targetPaginationPage.toLocaleString()} (500 companies/page)...`
-              : 'Loading matching worldwide companies...'}
+              : 'Updating matching worldwide companies...'}
           </span>
         </div>
       ) : filteredGlobalCompanies.length === 0 ? (
@@ -649,7 +682,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
             {globalPage > 1
               ? `No additional companies were found on page ${globalPage.toLocaleString()} for this filter.`
-              : 'No companies matched this exact combination of Continent, Country, Industry, or Revenue filters.'}
+              : 'No companies matched this exact combination of Continent, Country, Industry, Employee Count, or Revenue filters.'}
           </p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {globalPage > 1
@@ -668,7 +701,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
               <button
                 type="button"
                 onClick={() => handleSelectPage(1)}
-                className="min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+                className="min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-bold bg-lemon-400 hover:bg-lemon-300 text-petrol-950 transition-colors cursor-pointer"
               >
                 Return to Page 1
               </button>
@@ -686,11 +719,16 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
           <motion.div
             key={`companies-page-${renderedDirectoryPage}`}
             initial={{ opacity: 0, y: pageTransitionDir > 0 ? 14 : -10 }}
-            animate={{ opacity: isPaginationLoading ? 0.55 : 1, y: 0 }}
-            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-            aria-busy={isPaginationLoading}
+            animate={{
+              opacity: isPaginationLoading || globalDirectoryLoading ? 0.45 : 1,
+              y: 0,
+            }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            aria-busy={isPaginationLoading || globalDirectoryLoading}
             className={`relative ${
-              isPaginationLoading ? 'pointer-events-none' : ''
+              isPaginationLoading || globalDirectoryLoading
+                ? 'pointer-events-none'
+                : ''
             }`}
           >
             {/* Mobile Touch Cards (md:hidden) */}
@@ -708,7 +746,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
               return (
                 <div
                   key={comp.id}
-                  className="rounded-xl p-3.5 border border-slate-200/85 dark:border-slate-800/85 bg-white/85 dark:bg-slate-950/55 space-y-3"
+                  className="rounded-xl p-3.5 border border-slate-200/85 dark:border-slate-800/85 bg-white/85 dark:bg-slate-950/55 space-y-3 [content-visibility:auto] [contain-intrinsic-size:150px]"
                 >
                   <div className="flex items-start justify-between gap-2.5">
                     <div className="flex items-start gap-2.5 min-w-0">
@@ -856,6 +894,12 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                       <ArrowUpDown className="h-3 w-3 opacity-60" />
                     </button>
                   </th>
+                  <th
+                    scope="col"
+                    className="py-2.5 px-2.5 text-center whitespace-nowrap"
+                  >
+                    Quick View
+                  </th>
                   <th scope="col" className="py-2.5 px-3 whitespace-nowrap">
                     <button
                       type="button"
@@ -881,15 +925,15 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                   </th>
                   <th
                     scope="col"
-                    className="py-2.5 px-3 text-right whitespace-nowrap"
+                    className="py-2.5 px-2.5 text-right whitespace-nowrap"
                   >
                     Revenue
                   </th>
                   <th
                     scope="col"
-                    className="py-2.5 px-3 text-right whitespace-nowrap"
+                    className="py-2.5 px-2.5 text-right whitespace-nowrap"
                   >
-                    QuickView &amp; Emails
+                    Roster
                   </th>
                 </tr>
               </thead>
@@ -907,10 +951,10 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                   return (
                     <tr
                       key={comp.id}
-                      className="hover:bg-sky-500/[0.04] dark:hover:bg-sky-400/[0.05] transition-colors duration-150"
+                      className="hover:bg-petrol-500/[0.04] dark:hover:bg-lemon-400/[0.05] transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:48px]"
                     >
-                      <td className="py-2 px-3 whitespace-nowrap max-w-[230px]">
-                        <div className="flex items-center gap-2 min-w-0">
+                      <td className="py-2 px-2.5 whitespace-nowrap max-w-[230px]">
+                        <div className="flex items-center gap-1.5 min-w-0">
                           <CompanyLogoAvatar
                             name={comp.name}
                             logoUrl={comp.logoUrl}
@@ -948,7 +992,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                                 onSelectGlobalCompany(comp);
                               }}
                               title={comp.name}
-                              className="font-semibold text-left text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 hover:underline underline-offset-4 transition-colors cursor-pointer select-text truncate max-w-[145px] block"
+                              className="font-semibold text-left text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 hover:underline underline-offset-4 transition-colors cursor-pointer select-text truncate max-w-[148px] block"
                             >
                               {comp.name}
                             </button>
@@ -1000,6 +1044,26 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                         </div>
                       </td>
 
+                      <td className="py-2 px-2.5 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onMouseEnter={() => onPrefetchCompany?.(comp)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setQuickViewTarget({
+                              kind: 'company',
+                              company: comp,
+                            });
+                          }}
+                          title={`Open Sidebar QuickView for ${comp.name}`}
+                          aria-label={`Open Sidebar QuickView for ${comp.name}`}
+                          className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-petrol-300/80 dark:border-petrol-700 bg-bone-100/90 dark:bg-petrol-900/90 text-petrol-800 dark:text-lemon-300 hover:bg-petrol-700 hover:text-bone-50 hover:border-petrol-700 dark:hover:bg-lemon-400 dark:hover:text-petrol-950 dark:hover:border-lemon-400 transition-colors cursor-pointer whitespace-nowrap"
+                        >
+                          <Eye className="h-3.5 w-3.5 shrink-0" />
+                          <span>Quick</span>
+                        </button>
+                      </td>
+
                       <td
                         className="py-2 px-3 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap max-w-[165px]"
                         title={comp.location}
@@ -1020,34 +1084,17 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                         {comp.employeeRange}
                       </td>
 
-                      <td className="py-2 px-3 text-right font-mono tabular-nums text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                      <td className="py-2 px-2.5 text-right font-mono tabular-nums text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
                         {comp.revenueRange}
                       </td>
 
-                      <td className="py-2 px-3 text-right whitespace-nowrap">
+                      <td className="py-2 px-2.5 text-right whitespace-nowrap">
                         <div className="inline-flex items-center justify-end gap-1.5">
                           <button
                             type="button"
                             onMouseEnter={() => onPrefetchCompany?.(comp)}
-                            onClick={() =>
-                              setQuickViewTarget({
-                                kind: 'company',
-                                company: comp,
-                              })
-                            }
-                            title={`QuickView ${comp.name}`}
-                            aria-label={`QuickView ${comp.name}`}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 text-slate-700 dark:text-slate-200 hover:border-sky-500/50 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer whitespace-nowrap"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            <span>Quick</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onMouseEnter={() => onPrefetchCompany?.(comp)}
                             onClick={() => onSelectGlobalCompany(comp)}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-500/10 hover:bg-sky-600 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-petrol-800 dark:text-lemon-300 bg-petrol-700/10 dark:bg-lemon-400/15 hover:bg-petrol-700 hover:text-bone-50 dark:hover:bg-lemon-400 dark:hover:text-petrol-950 transition-colors cursor-pointer whitespace-nowrap"
                           >
                             <Users className="h-3.5 w-3.5" />
                             <span>Emails</span>

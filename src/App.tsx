@@ -1790,14 +1790,6 @@ export default function App() {
     if (hasFreeText && globalDirectory) {
       return globalDirectory.totalCompanies;
     }
-    if (
-      globalDirectory &&
-      !globalDirectoryLoading &&
-      globalDirectory.page === globalPage &&
-      globalDirectory.companies.length < 500
-    ) {
-      return globalDirectory.totalCompanies;
-    }
     if (filterFacets) return filterFacets.totalMatchedCompanies;
     if (globalDirectory) return globalDirectory.totalCompanies;
     if (filterExplorerResult) return filterExplorerResult.totalMatchedCompanies;
@@ -1808,8 +1800,6 @@ export default function App() {
     filters.industryKeyword,
     filterFacets,
     globalDirectory,
-    globalDirectoryLoading,
-    globalPage,
     filterExplorerResult,
   ]);
 

@@ -635,7 +635,7 @@ export async function harvestDeepPeopleWave2(
   const qEng = `site:linkedin.com/in/ "${queryAnchor}" (Engineer OR Developer OR Product OR Designer OR Architect OR Data)`;
   const qSales = `site:linkedin.com/in/ "${queryAnchor}" (Sales OR Marketing OR Growth OR Account OR Business OR Partnerships)`;
   const qFinanceOps = `site:linkedin.com/in/ "${queryAnchor}" (Finance OR Operations OR Legal OR People OR HR OR Talent OR Controller)`;
-  const qProfiles = `"${queryAnchor}" (site:rocketreach.co OR site:theorg.com/org OR site:crunchbase.com/person OR site:zoominfo.com/p)`;
+  const qProfiles = `"${queryAnchor}" (site:zoominfo.com/p OR site:zoominfo.com/pic OR site:rocketreach.co OR site:theorg.com/org OR site:crunchbase.com/person)`;
 
   const [engHits, salesHits, finOpsHits, profileHits, yahooDeep] = await Promise.all([
     withTimeout(queryBingRss(qEng, 1, 1800), timeoutMs, [] as RawSearchHit[]),

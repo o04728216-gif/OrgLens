@@ -67,6 +67,7 @@ import {
 import { inspectTargetWebsite } from './websiteScraper.ts';
 import { fetchClearbitCompanySuggestions } from './worldwideRegistryConnectors.ts';
 import { markUserApiActivity } from './worldwideCrawlerDaemon.ts';
+import { extractZoomInfoIntel } from './zoominfoExtractor.ts';
 
 const inFlightLookups = new Map<string, Promise<SearchResponse>>();
 
@@ -313,6 +314,7 @@ export async function discoverDomainEmployees(
       crawledEmails,
       webGroundedIntel,
       multiSourcePeopleWave1,
+      zoomInfoBundle,
       yahooLiPage1,
       yahooLiPage2,
       yahooLiExecs,
@@ -371,6 +373,11 @@ export async function discoverDomainEmployees(
         harvestPeopleMultiSourceWave1(guessedBrandName, resolvedDomain, 3200),
         3400,
         [] as CandidateEmployee[]
+      ),
+      withSoftDeadline(
+        extractZoomInfoIntel(guessedBrandName, resolvedDomain, 2200),
+        2400,
+        { companyIntel: null, people: [] as CandidateEmployee[] }
       ),
       withSoftDeadline(
         queryYahooSafe(linkedInCompanyQuery, 1, 25, 1850),
@@ -471,9 +478,18 @@ export async function discoverDomainEmployees(
       industryTags.join(', ') || 'Information Technology & Business Services';
 
     const companyDescription =
-      theOrgResult?.description || siteInfo.description || '';
+      theOrgResult?.description ||
+      siteInfo.description ||
+      zoomInfoBundle.companyIntel?.summary ||
+      '';
     const headquarters =
-      theOrgResult?.headquarters || vaultCompany?.location || '';
+      theOrgResult?.headquarters ||
+      (vaultCompany?.location && vaultCompany.location !== 'Global'
+        ? vaultCompany.location
+        : '') ||
+      zoomInfoBundle.companyIntel?.headquarters ||
+      vaultCompany?.location ||
+      '';
 
     // Comprehensive Roster Assembly:
     // Keep ALL distinct Org Chart positions (keyed by unique profileUrl/id so homonyms in large enterprises aren't dropped),
@@ -526,6 +542,7 @@ export async function discoverDomainEmployees(
       ...officerCandidates,
       ...siteInfo.employees,
       ...(webGroundedIntel?.employees || []),
+      ...zoomInfoBundle.people,
       ...multiSourcePeopleWave1,
       ...parsedSearchCandidates,
     ]) {
@@ -852,6 +869,7 @@ export async function discoverDomainEmployees(
       headquarters,
       employeeRange: effectiveEmpRange,
       revenueRange: estimateCompanyRevenueRange(effectiveEmpRange, companyName),
+      zoomInfoIntel: zoomInfoBundle.companyIntel || undefined,
       emailPattern,
       confirmedEmailsCount,
       sourcesUsed,

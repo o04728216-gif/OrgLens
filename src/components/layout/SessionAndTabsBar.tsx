@@ -29,9 +29,7 @@ export const SessionAndTabsBar: React.FC<SessionAndTabsBarProps> = ({
   activeTab,
   primaryTabs,
   currentDomainResult,
-  coherentMatchedOrgs,
   hasFilterTotals,
-  activeFilterCount,
   isFilterLoading,
   isFilterCompanyLoading,
   onSelectDomainSession,
@@ -100,19 +98,6 @@ export const SessionAndTabsBar: React.FC<SessionAndTabsBarProps> = ({
               />
             )}
             <span className="truncate">Filter Explorer</span>
-            <span
-              className={`hidden md:inline font-mono tabular-nums text-xs truncate ${
-                sessionMode === 'filter'
-                  ? 'text-lemon-200'
-                  : 'text-petrol-600 dark:text-lemon-300'
-              }`}
-            >
-              {hasFilterTotals
-                ? `· ${coherentMatchedOrgs.toLocaleString()} Orgs`
-                : activeFilterCount > 0
-                ? `· ${activeFilterCount} Filters`
-                : '· Worldwide'}
-            </span>
           </button>
         </div>
       </div>

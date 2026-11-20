@@ -359,7 +359,8 @@ export function matchesGeographyFilter(
   selectedContinents: string[],
   selectedCountries: string[],
   freeTextQuery: string,
-  sourceCountrySlug?: string
+  sourceCountrySlug?: string,
+  domain?: string
 ): boolean {
   const locLower = (locationText || '').trim().toLowerCase();
   const q = freeTextQuery.trim().toLowerCase();
@@ -372,13 +373,31 @@ export function matchesGeographyFilter(
     return true;
   }
 
-  // If the company was directly fetched from a matching country directory slug, honor it immediately
-  if (sourceCountrySlug) {
-    const allowedSlugs = resolveCountrySlugsFromFilters(
-      selectedContinents,
-      selectedCountries
-    );
-    if (allowedSlugs.includes(sourceCountrySlug)) {
+  const allowedSlugs = resolveCountrySlugsFromFilters(
+    selectedContinents,
+    selectedCountries
+  );
+
+  // If the HQ location explicitly identifies a specific country (e.g. "Pittsburgh, PA, United States"),
+  // that explicit HQ country ALWAYS takes precedence over a conflicting directory sourceCountrySlug!
+  const explicitLocCountry =
+    locLower && locLower !== 'global' && locLower !== 'worldwide'
+      ? inferCountrySlugFromLocation(locationText)
+      : undefined;
+
+  if (explicitLocCountry) {
+    return allowedSlugs.includes(explicitLocCountry);
+  }
+
+  // When location is "Global" or empty, honor the company's verified directory country slug
+  if (sourceCountrySlug && allowedSlugs.includes(sourceCountrySlug)) {
+    return true;
+  }
+
+  // Fallback to ccTLD (e.g. .ca, .co.uk, .de) when location is Global and sourceCountrySlug is empty
+  if (!sourceCountrySlug && domain) {
+    const ccSlug = inferCountrySlugFromLocation('', domain);
+    if (ccSlug && allowedSlugs.includes(ccSlug)) {
       return true;
     }
   }
@@ -529,11 +548,30 @@ export function estimateCompanyRevenueRange(
 }
 
 const CCTLD_TO_COUNTRY_SLUG: Record<string, string> = {
+  // North America & Caribbean
+  us: 'united-states',
+  ca: 'canada',
+  mx: 'mexico',
+  cr: 'costa-rica',
+  pa: 'panama',
+  pr: 'puerto-rico',
+  do: 'dominican-republic',
+  gt: 'guatemala',
+  jm: 'jamaica',
+  bs: 'bahamas',
+  bb: 'barbados',
+  tt: 'trinidad-and-tobago',
+  hn: 'honduras',
+  sv: 'el-salvador',
+  ni: 'nicaragua',
+  bz: 'belize',
+  bm: 'bermuda',
+  ky: 'cayman-islands',
+  cu: 'cuba',
+  ht: 'haiti',
+  // Europe
   uk: 'united-kingdom',
   gb: 'united-kingdom',
-  ca: 'canada',
-  au: 'australia',
-  nz: 'new-zealand',
   de: 'germany',
   fr: 'france',
   nl: 'netherlands',
@@ -563,6 +601,12 @@ const CCTLD_TO_COUNTRY_SLUG: Record<string, string> = {
   si: 'slovenia',
   lt: 'lithuania',
   lv: 'latvia',
+  cy: 'cyprus',
+  mt: 'malta',
+  is: 'iceland',
+  mc: 'monaco',
+  md: 'moldova-republic-of',
+  // Asia & Middle East
   in: 'india',
   jp: 'japan',
   sg: 'singapore',
@@ -581,19 +625,57 @@ const CCTLD_TO_COUNTRY_SLUG: Record<string, string> = {
   vn: 'viet-nam',
   tw: 'taiwan-province-of-china',
   bd: 'bangladesh',
+  lk: 'sri-lanka',
+  qa: 'qatar',
+  lb: 'lebanon',
+  jo: 'jordan',
+  kw: 'kuwait',
+  bh: 'bahrain',
+  om: 'oman',
+  kz: 'kazakhstan',
+  np: 'nepal',
+  kh: 'cambodia',
+  bn: 'brunei-darussalam',
+  // South America
   br: 'brazil',
   ar: 'argentina',
   cl: 'chile',
   pe: 'peru',
   uy: 'uruguay',
-  mx: 'mexico',
+  ec: 'ecuador',
+  ve: 'venezuela-bolivarian-republic-of',
+  bo: 'bolivia-plurinational-state-of',
+  py: 'paraguay',
+  gy: 'guyana',
+  sr: 'suriname',
+  // Africa
   za: 'south-africa',
   ng: 'nigeria',
   eg: 'egypt',
   ke: 'kenya',
   ma: 'morocco',
   gh: 'ghana',
-  us: 'united-states',
+  tn: 'tunisia',
+  ug: 'uganda',
+  tz: 'tanzania-united-republic-of',
+  dz: 'algeria',
+  rw: 'rwanda',
+  mu: 'mauritius',
+  sn: 'senegal',
+  ci: "côte-d'ivoire",
+  et: 'ethiopia',
+  zw: 'zimbabwe',
+  zm: 'zambia',
+  cm: 'cameroon',
+  bw: 'botswana',
+  na: 'namibia',
+  cd: 'congo-the-democratic-republic-of-the',
+  // Oceania & Antarctica
+  au: 'australia',
+  nz: 'new-zealand',
+  fj: 'fiji',
+  pg: 'papua-new-guinea',
+  aq: 'antarctica',
 };
 
 /**
