@@ -57,12 +57,21 @@ export function parseBroadWebPersonHit(
     .split(/\s+/)
     .filter((w) => w.length >= 3 && !['inc', 'llc', 'ltd', 'corp', 'group', 'company', 'the', 'and'].includes(w));
   const primaryToken = brandWords[0] || domainCore;
-  if (
-    primaryToken &&
-    primaryToken.length >= 3 &&
-    !combined.includes(primaryToken) &&
-    (!domain || !combined.includes(domain.toLowerCase()))
-  ) {
+  const escapedDom = domain
+    ? domain.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    : '';
+  const hasExactDomainBoundary =
+    Boolean(escapedDom) &&
+    new RegExp(`(?:^|[^a-z0-9])${escapedDom}(?:$|[^a-z0-9])`, 'i').test(
+      `${combined} ${hit.url || ''}`
+    );
+
+  if (primaryToken.length < 3) {
+    // For ultra-short brands like "X", "GE", "HP", require an exact domain boundary mention
+    if (!hasExactDomainBoundary) {
+      return null;
+    }
+  } else if (!combined.includes(primaryToken) && !hasExactDomainBoundary) {
     return null;
   }
 
@@ -202,16 +211,22 @@ async function harvestWikipediaKeyPeople(
     const wikitext = pageObj?.revisions?.[0]?.slots?.main?.['*'] || '';
     if (!wikitext) return [];
 
-    // Confirm domain or company relevance if infobox has website
+    // Confirm exact domain boundary or company relevance in infobox
     const lowerWiki = wikitext.toLowerCase();
-    if (
-      domain &&
-      !lowerWiki.includes(domain.toLowerCase()) &&
-      !lowerWiki.includes(extractDomainCore(domain).toLowerCase()) &&
-      !lowerWiki.includes('infobox company') &&
-      !lowerWiki.includes('infobox organization')
-    ) {
-      return [];
+    const escapedDom = domain
+      ? domain.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      : '';
+    const hasExactWikiDomain =
+      Boolean(escapedDom) &&
+      new RegExp(`(?:^|[^a-z0-9])${escapedDom}(?:$|[^a-z0-9])`, 'i').test(lowerWiki);
+    if (domain && !hasExactWikiDomain) {
+      if (
+        cleanCompany.length < 3 ||
+        (!lowerWiki.includes('infobox company') &&
+          !lowerWiki.includes('infobox organization'))
+      ) {
+        return [];
+      }
     }
 
     const employees: CandidateEmployee[] = [];
@@ -321,13 +336,16 @@ async function harvestGithubOrgMembers(
         })
         .catch(() => null);
       if (!orgResp?.data) continue;
-      const blog = String(orgResp.data.blog || '').toLowerCase();
-      const orgEmail = String(orgResp.data.email || '').toLowerCase();
+      const blogDom = orgResp.data.blog
+        ? normalizeDomain(String(orgResp.data.blog))
+        : '';
+      const orgEmail = String(orgResp.data.email || '').trim().toLowerCase();
       const orgDisplayName = String(orgResp.data.name || '').toLowerCase();
+      const targetDom = normalizeDomain(domain);
       if (
-        blog.includes(domain.toLowerCase()) ||
-        orgEmail.includes(domain.toLowerCase()) ||
-        orgDisplayName.includes(core)
+        (blogDom && (blogDom === targetDom || blogDom.endsWith(`.${targetDom}`))) ||
+        (orgEmail && orgEmail.endsWith(`@${targetDom}`)) ||
+        (core.length >= 4 && orgDisplayName.includes(core))
       ) {
         matchedOrg = cand;
         break;
@@ -550,10 +568,13 @@ export async function harvestPeopleMultiSourceWave1(
   const cleanCompany = cleanWhitespace(companyName);
   if (!cleanCompany) return [];
 
-  const qGeneral = `site:linkedin.com/in/ "${cleanCompany}"`;
-  const qOps = `site:linkedin.com/in/ "${cleanCompany}" (VP OR Director OR Manager OR Head OR Lead OR Engineer OR Sales OR Marketing)`;
+  const isShortBrand = cleanCompany.length < 3;
+  const queryAnchor = isShortBrand && domain ? domain : cleanCompany;
+
+  const qGeneral = `site:linkedin.com/in/ "${queryAnchor}"`;
+  const qOps = `site:linkedin.com/in/ "${queryAnchor}" (VP OR Director OR Manager OR Head OR Lead OR Engineer OR Sales OR Marketing)`;
   const qDomain = domain ? `site:linkedin.com/in/ "${domain}"` : '';
-  const qLeadership = `"${cleanCompany}" (CEO OR CTO OR CFO OR Founder OR "Vice President" OR "Managing Director")`;
+  const qLeadership = `"${queryAnchor}" (CEO OR CTO OR CFO OR Founder OR "Vice President" OR "Managing Director")`;
 
   const [
     ddgGeneral,
@@ -610,10 +631,11 @@ export async function harvestDeepPeopleWave2(
   const cleanCompany = cleanWhitespace(companyName);
   if (!cleanCompany) return [];
 
-  const qEng = `site:linkedin.com/in/ "${cleanCompany}" (Engineer OR Developer OR Product OR Designer OR Architect OR Data)`;
-  const qSales = `site:linkedin.com/in/ "${cleanCompany}" (Sales OR Marketing OR Growth OR Account OR Business OR Partnerships)`;
-  const qFinanceOps = `site:linkedin.com/in/ "${cleanCompany}" (Finance OR Operations OR Legal OR People OR HR OR Talent OR Controller)`;
-  const qProfiles = `"${cleanCompany}" (site:rocketreach.co OR site:theorg.com/org OR site:crunchbase.com/person OR site:zoominfo.com/p)`;
+  const queryAnchor = cleanCompany.length < 3 && domain ? domain : cleanCompany;
+  const qEng = `site:linkedin.com/in/ "${queryAnchor}" (Engineer OR Developer OR Product OR Designer OR Architect OR Data)`;
+  const qSales = `site:linkedin.com/in/ "${queryAnchor}" (Sales OR Marketing OR Growth OR Account OR Business OR Partnerships)`;
+  const qFinanceOps = `site:linkedin.com/in/ "${queryAnchor}" (Finance OR Operations OR Legal OR People OR HR OR Talent OR Controller)`;
+  const qProfiles = `"${queryAnchor}" (site:rocketreach.co OR site:theorg.com/org OR site:crunchbase.com/person OR site:zoominfo.com/p)`;
 
   const [engHits, salesHits, finOpsHits, profileHits, yahooDeep] = await Promise.all([
     withTimeout(queryBingRss(qEng, 1, 1800), timeoutMs, [] as RawSearchHit[]),

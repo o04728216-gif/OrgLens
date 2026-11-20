@@ -280,6 +280,33 @@ export function parseLinkedInHit(
   const fullName = segments[0] || '';
   if (!looksLikePersonName(fullName)) return null;
 
+  const combinedHitText = `${rawTitle} ${hit.snippet || ''}`.toLowerCase();
+  const cleanCompanyLower = cleanWhitespace(companyName).toLowerCase();
+  const escapedDom = domain
+    ? domain.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    : '';
+  const hasDomainBoundary =
+    Boolean(escapedDom) &&
+    new RegExp(`(?:^|[^a-z0-9])${escapedDom}(?:$|[^a-z0-9])`, 'i').test(
+      combinedHitText
+    );
+  const significantTokens = cleanCompanyLower
+    .split(/\s+/)
+    .filter(
+      (t) =>
+        t.length >= 3 &&
+        !['inc', 'llc', 'ltd', 'corp', 'corporation', 'group', 'the', 'and'].includes(t)
+    );
+  const hasCompanyMention =
+    significantTokens.length > 0 &&
+    significantTokens.some((tok) => combinedHitText.includes(tok));
+
+  if (cleanCompanyLower.length < 3) {
+    if (!hasDomainBoundary) return null;
+  } else if (significantTokens.length > 0 && !hasCompanyMention && !hasDomainBoundary) {
+    return null;
+  }
+
   let rawRole = '';
   if (segments.length >= 2) {
     const nonCompany = segments

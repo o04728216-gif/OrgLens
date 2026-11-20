@@ -167,8 +167,8 @@ export const B2BLandingAuthPage: React.FC<B2BLandingAuthPageProps> = ({
               direct work email addresses.
             </p>
 
-            {/* Clear 2-Step Visual Guide so First-Time Users Know Exactly Where to Start */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 max-w-2xl">
+            {/* Clear 2-Step Visual Guide (hidden on mobile so Sign In sits higher) */}
+            <div className="hidden md:grid md:grid-cols-2 gap-4 pt-2 max-w-2xl">
               <div className="rounded-xl p-4 bg-bone-50 dark:bg-petrol-900/80 border border-bone-300 dark:border-petrol-700/80">
                 <div className="flex items-center gap-2 text-xs font-mono font-semibold text-petrol-700 dark:text-lemon-300">
                   <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-petrol-700 text-lemon-300 dark:bg-lemon-400 dark:text-petrol-950 text-[11px] font-bold">

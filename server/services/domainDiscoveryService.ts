@@ -174,16 +174,36 @@ export async function discoverDomainEmployees(
       }
     }
 
-    const sqliteCached = getVaultCachedDomainSearch<SearchResponse>(
-      domain,
-      explicitCompanySlug
-    );
+    const sqliteCached = getVaultCachedDomainSearch<
+      SearchResponse & { cacheGuardVersion?: number }
+    >(domain, explicitCompanySlug);
     const cachedCount = sqliteCached?.employees?.length || 0;
     const cachedAgeMs = sqliteCached?.fetchedAt
       ? startedAt - new Date(sqliteCached.fetchedAt).getTime()
       : 0;
     const isSparseStaleCache = cachedCount < 5 && cachedAgeMs > 10 * 60 * 1000;
-    if (sqliteCached && cachedCount > 0 && !isSparseStaleCache) {
+
+    // Self-heal any legacy cached row produced before strict domain matching
+    // (e.g. x.com accidentally cached as AT&T / att) so production SQLite auto-repairs on first lookup!
+    let isMismatchedLegacyCache = false;
+    if (sqliteCached && domain && (sqliteCached.cacheGuardVersion || 0) < 2) {
+      const domCore = extractDomainCore(domain).toLowerCase();
+      const cachedNameLower = (sqliteCached.companyName || '').toLowerCase();
+      const cachedSlugLower = (sqliteCached.companySlug || '').toLowerCase();
+      const nameOrSlugHasCore =
+        domCore.length > 0 &&
+        (cachedNameLower.includes(domCore) || cachedSlugLower.includes(domCore));
+      if (!nameOrSlugHasCore || domCore.length <= 2) {
+        isMismatchedLegacyCache = true;
+      }
+    }
+
+    if (
+      sqliteCached &&
+      cachedCount > 0 &&
+      !isSparseStaleCache &&
+      !isMismatchedLegacyCache
+    ) {
       if (sqliteCached.domain) {
         domainCache.set(sqliteCached.domain, {
           data: sqliteCached,
@@ -255,8 +275,13 @@ export async function discoverDomainEmployees(
         ? humanizeSlug(explicitCompanySlug)
         : humanizeSlug(extractDomainCore(resolvedDomain)));
 
-    const linkedInCompanyQuery = `site:linkedin.com/in/ "${guessedBrandName}"`;
-    const linkedInExecQuery = `site:linkedin.com/in/ "${guessedBrandName}" (CEO OR CTO OR CFO OR VP OR Director OR Head OR Founder)`;
+    const queryBrandAnchor =
+      guessedBrandName.trim().length < 3 && resolvedDomain
+        ? resolvedDomain
+        : guessedBrandName;
+
+    const linkedInCompanyQuery = `site:linkedin.com/in/ "${queryBrandAnchor}"`;
+    const linkedInExecQuery = `site:linkedin.com/in/ "${queryBrandAnchor}" (CEO OR CTO OR CFO OR VP OR Director OR Head OR Founder)`;
     const linkedInDomainQuery = resolvedDomain
       ? `site:linkedin.com/in/ "${resolvedDomain}"`
       : linkedInCompanyQuery;
@@ -839,11 +864,15 @@ export async function discoverDomainEmployees(
     };
 
     if (rankedEmployees.length > 0 && resolvedDomain) {
+      const guardedPayload = {
+        ...result,
+        cacheGuardVersion: 2,
+      };
       domainCache.set(resolvedDomain, {
         data: result,
         expiresAt: Date.now() + CACHE_TTL_MS,
       });
-      saveVaultCachedDomainSearch(resolvedDomain, resolvedSlug, result);
+      saveVaultCachedDomainSearch(resolvedDomain, resolvedSlug, guardedPayload);
     }
 
     return result;

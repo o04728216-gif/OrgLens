@@ -69,14 +69,32 @@ interface GraphQLCompanyMeta {
   stats?: { employeeRange?: string };
 }
 
-function matchesTargetDomainOrBrand(
+function isExactDomainMatch(candidateDomain: string, targetDomain: string): boolean {
+  const cand = normalizeDomain(candidateDomain);
+  const target = normalizeDomain(targetDomain);
+  if (!cand || !target) return false;
+  return (
+    cand === target ||
+    cand.endsWith(`.${target}`) ||
+    target.endsWith(`.${cand}`)
+  );
+}
+
+/**
+ * Scores how strongly a TheOrg company matches the requested target domain/brand:
+ *   3 = Exact domain match via `extensions` or `social.websiteUrl` hostname
+ *   2 = Exact LinkedIn company slug match
+ *   1 = Exact brand/core name match (ONLY when company has NO conflicting domain and name length >= 4)
+ *   0 = Reject (conflicting corporate website/extensions or unrelated fuzzy search hit)
+ */
+function scoreTargetDomainMatch(
   company: GraphQLCompanyMeta,
   domain: string,
   linkedinCompanySlug: string | null,
   brandName: string,
   skipDomainGuard: boolean
-): boolean {
-  if (skipDomainGuard || !domain) return true;
+): number {
+  if (skipDomainGuard || !domain) return 3;
 
   const extensions = Array.isArray(company.extensions)
     ? company.extensions
@@ -87,32 +105,57 @@ function matchesTargetDomainOrBrand(
   const websiteDomain = rawWebsiteUrl ? normalizeDomain(rawWebsiteUrl) : '';
   const orgLiUrl = String(company.social?.linkedInUrl || '').toLowerCase();
   const orgName = String(company.name || '').trim();
-  const domainLower = domain.toLowerCase();
+  const domainLower = normalizeDomain(domain);
 
   const domainMatched =
-    extensions.some(
-      (ext) => ext === domainLower || domainLower.endsWith(`.${ext}`)
-    ) ||
-    websiteDomain === domainLower ||
-    rawWebsiteUrl.toLowerCase().includes(domainLower);
+    extensions.some((ext) => isExactDomainMatch(ext, domainLower)) ||
+    isExactDomainMatch(websiteDomain, domainLower);
 
-  const linkedinMatched =
-    Boolean(linkedinCompanySlug) &&
-    orgLiUrl.includes(`/company/${linkedinCompanySlug}`);
+  if (domainMatched) return 3;
 
-  if (
-    (websiteDomain.length > 0 || extensions.length > 0) &&
-    !domainMatched &&
-    !linkedinMatched
-  ) {
-    const orgSlugNorm = slugifyName(orgName);
-    const brandSlugNorm = slugifyName(brandName);
-    const coreNorm = slugifyName(extractDomainCore(domain));
-    if (orgSlugNorm !== brandSlugNorm && orgSlugNorm !== coreNorm) {
-      return false;
-    }
+  const linkedinMatched = linkedinCompanySlug
+    ? orgLiUrl.includes(`/company/${linkedinCompanySlug.toLowerCase()}`)
+    : false;
+
+  if (linkedinMatched) return 2;
+
+  // If the company explicitly lists a DIFFERENT corporate domain or email extensions
+  // that do NOT match our target domain (e.g. att.com when user searched x.com), REJECT it.
+  if (websiteDomain.length > 0 || extensions.length > 0) {
+    return 0;
   }
-  return true;
+
+  // Only allow name-only fallback when the org record has no website/extensions at all
+  // AND the brand/core identifier is specific enough (>= 4 chars) to prevent short-name collisions.
+  const orgSlugNorm = slugifyName(orgName);
+  const brandSlugNorm = slugifyName(brandName);
+  const coreNorm = slugifyName(extractDomainCore(domainLower));
+  if (
+    (coreNorm.length >= 4 && orgSlugNorm === coreNorm) ||
+    (brandSlugNorm.length >= 4 && orgSlugNorm === brandSlugNorm)
+  ) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function matchesTargetDomainOrBrand(
+  company: GraphQLCompanyMeta,
+  domain: string,
+  linkedinCompanySlug: string | null,
+  brandName: string,
+  skipDomainGuard: boolean
+): boolean {
+  return (
+    scoreTargetDomainMatch(
+      company,
+      domain,
+      linkedinCompanySlug,
+      brandName,
+      skipDomainGuard
+    ) > 0
+  );
 }
 
 /**
@@ -617,32 +660,7 @@ export async function discoverViaTheOrg(
   )
     .map((c) => c.slug)
     .filter((s) => Boolean(s) && !triedSlugs.has(s))
-    .slice(0, 2);
-
-  const metaCandidates: Array<{ slug: string; meta?: GraphQLCompanyMeta; skipGuard: boolean }> = [];
-
-  for (const s of domMatchedSlugs) {
-    triedSlugs.add(s);
-    metaCandidates.push({ slug: s, skipGuard: true });
-  }
-
-  for (let i = 0; i < candidateSlugs.length; i++) {
-    const meta = batchProbe[`c${i}`] as GraphQLCompanyMeta | null | undefined;
-    if (!meta?.slug || triedSlugs.has(meta.slug)) continue;
-    if (
-      !matchesTargetDomainOrBrand(
-        meta,
-        domain,
-        linkedinCompanySlug,
-        brandName,
-        false
-      )
-    ) {
-      continue;
-    }
-    triedSlugs.add(meta.slug);
-    metaCandidates.push({ slug: meta.slug, meta, skipGuard: true });
-  }
+    .slice(0, 5);
 
   const brandSlugs = (
     (
@@ -653,24 +671,81 @@ export async function discoverViaTheOrg(
   )
     .map((c) => c.slug)
     .filter((s) => Boolean(s) && !triedSlugs.has(s))
-    .slice(0, 2);
+    .slice(0, 3);
 
-  for (const s of brandSlugs) {
-    triedSlugs.add(s);
-    metaCandidates.push({ slug: s, skipGuard: false });
+  const verifiedCandidates: Array<{
+    slug: string;
+    meta: GraphQLCompanyMeta;
+    score: number;
+  }> = [];
+
+  for (let i = 0; i < candidateSlugs.length; i++) {
+    const meta = batchProbe[`c${i}`] as GraphQLCompanyMeta | null | undefined;
+    if (!meta?.slug || triedSlugs.has(meta.slug)) continue;
+    const score = scoreTargetDomainMatch(
+      meta,
+      domain,
+      linkedinCompanySlug,
+      brandName,
+      false
+    );
+    triedSlugs.add(meta.slug);
+    if (score > 0) {
+      verifiedCandidates.push({ slug: meta.slug, meta, score });
+    }
   }
 
-  if (metaCandidates.length === 0) return null;
+  // Batch-verify all fuzzy domSearch + brandSearch slugs in ONE ~150ms aliased GraphQL metadata call
+  // so unrelated companies returned by fuzzy search (e.g. `att` when searching `x.com`) are ALWAYS rejected!
+  const unverifiedSearchSlugs = Array.from(
+    new Set([...domMatchedSlugs, ...brandSlugs])
+  )
+    .filter((s) => !triedSlugs.has(s))
+    .slice(0, 6);
 
-  // Fire up to 3 top candidate slugs in parallel and pick the richest verified org chart!
+  if (unverifiedSearchSlugs.length > 0) {
+    const verifyAliases = unverifiedSearchSlugs.map(
+      (s, idx) => `v${idx}: company(slug: ${JSON.stringify(s)}) ${companySelection}`
+    );
+    const verifiedBatch = await queryTheOrgGraphQL<
+      Record<string, GraphQLCompanyMeta | null>
+    >(`query {\n${verifyAliases.join('\n')}\n}`, {}, 1400);
+
+    if (verifiedBatch) {
+      for (let i = 0; i < unverifiedSearchSlugs.length; i++) {
+        const meta = verifiedBatch[`v${i}`];
+        if (!meta?.slug || triedSlugs.has(meta.slug)) continue;
+        const score = scoreTargetDomainMatch(
+          meta,
+          domain,
+          linkedinCompanySlug,
+          brandName,
+          false
+        );
+        triedSlugs.add(meta.slug);
+        if (score > 0) {
+          verifiedCandidates.push({ slug: meta.slug, meta, score });
+        }
+      }
+    }
+  }
+
+  if (verifiedCandidates.length === 0) return null;
+
+  // Strictly prioritize highest match tier (Exact Domain Match = 3 ALWAYS beats weaker brand matches!)
+  const bestTierScore = Math.max(...verifiedCandidates.map((c) => c.score));
+  const topTierCandidates = verifiedCandidates
+    .filter((c) => c.score === bestTierScore)
+    .slice(0, 2);
+
   const parallelHits = await Promise.all(
-    metaCandidates.slice(0, 3).map((cand) =>
+    topTierCandidates.map((cand) =>
       fetchFullTheOrgCompany(
         cand.slug,
         domain,
         linkedinCompanySlug,
         brandName,
-        cand.skipGuard,
+        false,
         cand.meta
       ).catch(() => null)
     )
