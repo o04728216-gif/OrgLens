@@ -8,7 +8,7 @@ import {
 const SNAPSHOTS_KEY = 'orglens_snapshots_v5';
 const QUEUE_KEY = 'orglens_sync_queue_v4';
 const WIDGETS_KEY = 'orglens_widgets_v3';
-const THEME_KEY = 'orglens_theme_v1';
+const THEME_KEY = 'orglens_theme_v2';
 
 export const DEFAULT_WIDGETS: WidgetConfig[] = [
   {
@@ -123,9 +123,9 @@ export function loadSavedTheme(): 'dark' | 'light' {
     const val = localStorage.getItem(THEME_KEY);
     if (val === 'light' || val === 'dark') return val;
   } catch {
-    // Default dark
+    // Default Bone White + Petrol Blue + Lemon Yellow light palette
   }
-  return 'dark';
+  return 'light';
 }
 
 export function saveTheme(theme: 'dark' | 'light'): void {

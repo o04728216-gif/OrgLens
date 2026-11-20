@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Crown,
   ExternalLink,
@@ -7,6 +7,7 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import type {
   DepartmentCategory,
   EmployeeRecord,
@@ -91,6 +92,8 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     number | null
   >(null);
   const localPageTimerRef = useRef<number | null>(null);
+  const [pageTransitionDir, setPageTransitionDir] = useState<1 | -1>(1);
+  const pendingPageSnapRef = useRef(false);
   const listTopRef = useRef<HTMLDivElement>(null);
 
   const roleFilter =
@@ -303,22 +306,42 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
     ? requestedServerPage ?? globalPage
     : localPageLoadingTarget ?? safePage;
 
+  const renderedRolesPageKey = useServerBatchPagination
+    ? `server-${filterResult?.page ?? globalPage}`
+    : `local-${safePage}`;
+
+  useLayoutEffect(() => {
+    if (!pendingPageSnapRef.current) return;
+    pendingPageSnapRef.current = false;
+    scrollToListTop(listTopRef.current, 88, 'instant');
+  }, [renderedRolesPageKey]);
+
   const handleSelectRolesPage = (nextPage: number) => {
     const bounded = Math.max(1, Math.min(totalPages, nextPage));
-    scrollToListTop(listTopRef.current);
 
     if (useServerBatchPagination && onChangeGlobalPage) {
-      if (bounded === globalPage && !isPaginationLoading) return;
+      if (bounded === globalPage && !isPaginationLoading) {
+        scrollToListTop(listTopRef.current, 88, 'instant');
+        return;
+      }
+      setPageTransitionDir(bounded >= globalPage ? 1 : -1);
+      pendingPageSnapRef.current = true;
       if (isPageCached?.(bounded)) {
         setRequestedServerPage(null);
       } else {
         setRequestedServerPage(bounded);
+        scrollToListTop(listTopRef.current, 88, 'instant');
       }
       onChangeGlobalPage(bounded);
       return;
     }
 
-    if (bounded === safePage) return;
+    if (bounded === safePage) {
+      scrollToListTop(listTopRef.current, 88, 'instant');
+      return;
+    }
+    setPageTransitionDir(bounded >= safePage ? 1 : -1);
+    pendingPageSnapRef.current = true;
     if (localPageTimerRef.current !== null) {
       window.clearTimeout(localPageTimerRef.current);
       localPageTimerRef.current = null;
@@ -552,10 +575,14 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
               }
             />
           )}
-          <div
+          <motion.div
+            key={`roles-${renderedRolesPageKey}`}
+            initial={{ opacity: 0, y: pageTransitionDir > 0 ? 14 : -10 }}
+            animate={{ opacity: isPaginationLoading ? 0.55 : 1, y: 0 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
             aria-busy={isPaginationLoading}
-            className={`relative transition-opacity duration-150 ${
-              isPaginationLoading ? 'opacity-55 pointer-events-none' : ''
+            className={`relative ${
+              isPaginationLoading ? 'pointer-events-none' : ''
             }`}
           >
             {/* Mobile Touch Cards (md:hidden) */}
@@ -678,7 +705,7 @@ export const JobTitleTab: React.FC<JobTitleTabProps> = ({
               </tbody>
             </table>
           </SwipeableTableContainer>
-          </div>
+          </motion.div>
         </div>
       )}
 

@@ -1361,7 +1361,7 @@ export default function App() {
       setFilterSelectedSeniority('All');
       setFilterSelectedCompany(company);
       setFilterCompanyError(null);
-      scrollToListTop(resultsTopRef.current);
+      scrollToListTop(resultsTopRef.current, 88, 'instant');
 
       const cleanDom = company.domain
         ? sanitizeClientDomain(company.domain)
@@ -1548,7 +1548,7 @@ export default function App() {
     setContactsPage(1);
     setRolesPage(1);
     setLocalSearchQuery('');
-    scrollToListTop(resultsTopRef.current);
+    scrollToListTop(resultsTopRef.current, 88, 'instant');
   }, []);
 
   const effectiveRoutedView: TopLevelAppView =
@@ -2026,18 +2026,18 @@ export default function App() {
   return (
     <>
       <OrgLensLogoLoaderOverlay visible={isLoginOverlayActive} />
-      <div className="min-h-screen relative overflow-x-clip bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 transition-colors duration-200">
+      <div className="min-h-screen relative overflow-x-clip bg-bone-100 text-petrol-900 dark:bg-petrol-950 dark:text-bone-100 transition-colors duration-200">
         <div
           aria-hidden="true"
-        className="pointer-events-none fixed inset-0 overflow-hidden z-0"
-      >
-        <div className="absolute -top-40 left-1/2 -translate-x-1/2 h-[460px] w-[880px] rounded-full bg-sky-500/12 dark:bg-sky-500/10 blur-3xl" />
-        <div className="absolute top-72 -right-32 h-[360px] w-[520px] rounded-full bg-indigo-500/10 dark:bg-indigo-500/8 blur-3xl" />
-      </div>
+          className="pointer-events-none fixed inset-0 overflow-hidden z-0"
+        >
+          <div className="absolute -top-40 left-1/2 -translate-x-1/2 h-[420px] w-[860px] rounded-full bg-petrol-500/10 dark:bg-petrol-500/14 blur-3xl" />
+          <div className="absolute top-80 -right-32 h-[340px] w-[480px] rounded-full bg-lemon-400/12 dark:bg-lemon-400/8 blur-3xl" />
+        </div>
 
       {publicConfig.announcementBanner?.trim() && (
-        <div className="relative z-30 bg-sky-600 text-white px-4 py-2 text-xs font-medium text-center flex items-center justify-center gap-2">
-          <Megaphone className="h-3.5 w-3.5 shrink-0" />
+        <div className="relative z-30 bg-petrol-800 text-bone-50 border-b border-lemon-400/40 px-4 py-2 text-xs font-medium text-center flex items-center justify-center gap-2">
+          <Megaphone className="h-3.5 w-3.5 text-lemon-300 shrink-0" />
           <span>{publicConfig.announcementBanner}</span>
         </div>
       )}
@@ -2046,23 +2046,38 @@ export default function App() {
         user={user}
         monthlyPriceUsdt={publicConfig.unlimitedMonthlyPriceUsdt}
         appView={appView}
-        sessionMode={sessionMode}
-        activeTab={activeTab}
-        primaryTabs={primaryTabs}
         onBrandClick={() => {
           setAppView('workspace');
           setSessionMode('domain');
           setActiveTab('full-names-emails');
         }}
-        onSelectTab={handleSelectPrimaryTab}
-        onFocusDomainLookup={() => {
+        onQuickSearchSelectCompany={(company) => {
+          void loadFilterCompanyContacts(company);
+        }}
+        onQuickSearchShowMore={(query) => {
+          filterCompanyAbortRef.current?.abort();
+          setIsFilterCompanyLoading(false);
+          setFilterSelectedCompany(null);
+          setFilterCompanyResult(null);
+          setFilterCompanyError(null);
+          setAppView('workspace');
+          setSessionMode('filter');
+          setActiveTab('industry');
+          setGlobalPage(1);
+          setContactsPage(1);
+          setRolesPage(1);
+          setLocalSearchQuery('');
+          setFilters({
+            ...INITIAL_SIDEBAR_FILTERS,
+            companyNameFilter: query,
+          });
+          scrollToListTop(resultsTopRef.current, 88, 'instant');
+        }}
+        onQuickSearchDirectDomain={(domain) => {
           setAppView('workspace');
           setSessionMode('domain');
           setActiveTab('full-names-emails');
-          scrollToListTop(searchInputRef.current, 110);
-          window.setTimeout(() => {
-            searchInputRef.current?.focus();
-          }, 120);
+          void executeDomainLookup(domain, false);
         }}
         onOpenProfile={() => {
           setExhaustedCoinsPrompt(null);
@@ -2481,7 +2496,7 @@ export default function App() {
       {appView === 'workspace' && (
         <nav
           aria-label="Mobile quick navigation"
-          className="lg:hidden fixed bottom-0 inset-x-0 z-30 h-14 backdrop-blur-xl bg-white/95 dark:bg-[#090d16]/95 border-t border-slate-200/90 dark:border-slate-800/90 px-2 grid grid-cols-4 gap-1"
+          className="lg:hidden fixed bottom-0 inset-x-0 z-30 h-14 bg-petrol-700/96 dark:bg-petrol-900/96 backdrop-blur-md border-t border-petrol-600/80 dark:border-petrol-800 px-2 grid grid-cols-4 gap-1"
         >
           <button
             type="button"
@@ -2492,8 +2507,8 @@ export default function App() {
             }}
             className={`flex flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
               sessionMode === 'domain' && !mobileSidebarOpen
-                ? 'text-sky-600 dark:text-sky-400'
-                : 'text-slate-500 dark:text-slate-400'
+                ? 'text-lemon-300'
+                : 'text-bone-200/80'
             }`}
           >
             <Search className="h-4 w-4" />
@@ -2510,8 +2525,8 @@ export default function App() {
               sessionMode === 'filter' &&
               activeTab === 'industry' &&
               !mobileSidebarOpen
-                ? 'text-sky-600 dark:text-sky-400'
-                : 'text-slate-500 dark:text-slate-400'
+                ? 'text-lemon-300'
+                : 'text-bone-200/80'
             }`}
           >
             <Building2 className="h-4 w-4" />
@@ -2528,8 +2543,8 @@ export default function App() {
               activeTab === 'full-names-emails' &&
               sessionMode === 'filter' &&
               !mobileSidebarOpen
-                ? 'text-sky-600 dark:text-sky-400'
-                : 'text-slate-500 dark:text-slate-400'
+                ? 'text-lemon-300'
+                : 'text-bone-200/80'
             }`}
           >
             <Users className="h-4 w-4" />
@@ -2541,8 +2556,8 @@ export default function App() {
             onClick={() => setMobileSidebarOpen(true)}
             className={`relative flex flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
               mobileSidebarOpen || activeFilterCount > 0
-                ? 'text-sky-600 dark:text-sky-400'
-                : 'text-slate-500 dark:text-slate-400'
+                ? 'text-lemon-300'
+                : 'text-bone-200/80'
             }`}
           >
             <SlidersHorizontal className="h-4 w-4" />

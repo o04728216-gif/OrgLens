@@ -19,17 +19,17 @@ interface MicroDot {
   phase: number;
 }
 
-const RED_DARK_PALETTE = ['239, 68, 68', '244, 63, 94', '220, 38, 38'] as const;
-const RED_LIGHT_PALETTE = ['220, 38, 38', '225, 29, 72', '185, 28, 28'] as const;
+const RED_DARK_PALETTE = ['28, 107, 126', '70, 143, 161', '14, 59, 71'] as const;
+const RED_LIGHT_PALETTE = ['14, 59, 71', '28, 107, 126', '49, 80, 91'] as const;
 const YELLOW_DARK_PALETTE = [
-  '250, 204, 21',
-  '253, 224, 71',
-  '245, 158, 11',
+  '232, 212, 56',
+  '242, 224, 86',
+  '214, 190, 28',
 ] as const;
 const YELLOW_LIGHT_PALETTE = [
-  '234, 179, 8',
-  '217, 119, 6',
-  '202, 138, 4',
+  '214, 190, 28',
+  '173, 150, 14',
+  '232, 212, 56',
 ] as const;
 
 export const RainbowMotionBackdrop: React.FC<RainbowMotionBackdropProps> = ({

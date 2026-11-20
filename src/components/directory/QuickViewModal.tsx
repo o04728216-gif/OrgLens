@@ -136,20 +136,20 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-lg h-full bg-white dark:bg-slate-950 border-l border-slate-200/90 dark:border-slate-800 shadow-2xl flex flex-col overflow-hidden"
+        className="relative w-full max-w-lg h-full bg-bone-50 dark:bg-petrol-950 border-l border-bone-300 dark:border-petrol-700 shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Right-Side Drawer Header */}
-        <div className="shrink-0 px-4 py-3 border-b border-slate-200/80 dark:border-slate-800/80 flex items-start justify-between gap-2.5 bg-slate-50/85 dark:bg-slate-900/70">
+        {/* Right-Side Drawer Header — Petrol Blue Anchor */}
+        <div className="shrink-0 px-4 py-3.5 border-b border-petrol-600/80 flex items-start justify-between gap-2.5 bg-petrol-700 text-bone-50">
           <div className="min-w-0">
-            <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-sky-600 dark:text-sky-400">
+            <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-lemon-300">
               <Building2 className="h-3.5 w-3.5" />
               <span>Company QuickView</span>
             </div>
-            <h3 className="mt-0.5 text-base font-bold text-slate-900 dark:text-white truncate">
+            <h3 className="mt-0.5 text-base font-bold text-bone-50 truncate">
               {target.company.name}
             </h3>
-            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-bone-200/85">
               {target.company.domain && (
                 <a
                   href={
@@ -158,7 +158,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                   }
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="font-mono text-sky-600 dark:text-sky-400 hover:underline inline-flex items-center gap-1"
+                  className="font-mono text-lemon-300 hover:underline inline-flex items-center gap-1"
                 >
                   <Globe2 className="h-3 w-3" />
                   <span>{target.company.domain}</span>
@@ -178,7 +178,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close QuickView"
-            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-800 cursor-pointer shrink-0"
+            className="p-1.5 rounded-lg text-bone-200 hover:text-bone-50 hover:bg-petrol-600 cursor-pointer shrink-0"
           >
             <X className="h-4 w-4" />
           </button>
@@ -329,7 +329,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                 onClose();
                 onOpenFullCompany(target.company);
               }}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white shadow-xs transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-lemon-400 hover:bg-lemon-300 text-petrol-950 border border-lemon-500/40 shadow-xs transition-colors cursor-pointer"
             >
               <Users className="h-3.5 w-3.5" />
               <span>Open Full Roster</span>

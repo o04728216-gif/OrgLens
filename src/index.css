@@ -1,6 +1,61 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
+@theme {
+  /* Signature OrgLens Palette: Petrol Blue, Bone White & Lemon Yellow */
+  --color-petrol-950: #06161c;
+  --color-petrol-900: #081c24;
+  --color-petrol-800: #0d2a35;
+  --color-petrol-700: #0e3b47;
+  --color-petrol-600: #145060;
+  --color-petrol-500: #1c6b7e;
+  --color-petrol-400: #468fa1;
+  --color-petrol-200: #b8d6de;
+  --color-petrol-100: #e2eff2;
+  --color-petrol-50: #eff6f8;
+
+  --color-bone-50: #fdfcf9;
+  --color-bone-100: #f6f4ee;
+  --color-bone-200: #ece8dd;
+  --color-bone-300: #dcd6c8;
+  --color-bone-400: #c4bdb0;
+
+  --color-lemon-50: #fcf9df;
+  --color-lemon-100: #f7efb2;
+  --color-lemon-200: #f2e580;
+  --color-lemon-300: #f2e056;
+  --color-lemon-400: #e8d438;
+  --color-lemon-500: #d6be1c;
+  --color-lemon-600: #ad960e;
+
+  /* Platform-wide structural alignment: warm Bone White light surfaces & Deep Petrol dark surfaces */
+  --color-white: #fdfcf9;
+  --color-slate-50: #f6f4ee;
+  --color-slate-100: #ece8dd;
+  --color-slate-200: #dcd6c8;
+  --color-slate-300: #c4bdb0;
+  --color-slate-400: #6f868e;
+  --color-slate-500: #4a6670;
+  --color-slate-600: #31505b;
+  --color-slate-700: #1c424f;
+  --color-slate-800: #133440;
+  --color-slate-900: #0d2731;
+  --color-slate-950: #071920;
+
+  /* Platform-wide interactive Petrol scale replacing generic sky blue */
+  --color-sky-50: #eff6f8;
+  --color-sky-100: #dcecf0;
+  --color-sky-200: #b6d6df;
+  --color-sky-300: #7eb5c4;
+  --color-sky-400: #4c96aa;
+  --color-sky-500: #1c6b7e;
+  --color-sky-600: #0e3b47;
+  --color-sky-700: #0b303a;
+  --color-sky-800: #09262e;
+  --color-sky-900: #071d24;
+  --color-sky-950: #051419;
+}
+
 @layer base {
   :root {
     --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -32,6 +87,16 @@
     touch-action: manipulation;
   }
 
+  /* Crisp accessible Lemon-Petrol focus indicators so keyboard & click targets stand out */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid #e8d438;
+    outline-offset: 2px;
+  }
+
   /* Small placeholder text across all inputs & textareas site-wide */
   input::placeholder,
   textarea::placeholder {
@@ -58,10 +123,10 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Smooth horizontal swipe scrollbar for PC results tables */
+  /* Smooth horizontal swipe scrollbar styled in Petrol Blue & Lemon Yellow */
   .swipe-table-scroll {
     scrollbar-width: thin;
-    scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+    scrollbar-color: rgba(14, 59, 71, 0.45) transparent;
     -webkit-overflow-scrolling: touch;
   }
 
@@ -70,17 +135,17 @@
   }
 
   .swipe-table-scroll::-webkit-scrollbar-track {
-    background: rgba(148, 163, 184, 0.08);
+    background: rgba(14, 59, 71, 0.08);
     border-radius: 9999px;
   }
 
   .swipe-table-scroll::-webkit-scrollbar-thumb {
-    background: rgba(100, 116, 139, 0.4);
+    background: rgba(14, 59, 71, 0.42);
     border-radius: 9999px;
   }
 
   .swipe-table-scroll::-webkit-scrollbar-thumb:hover {
-    background: rgba(14, 165, 233, 0.65);
+    background: rgba(232, 212, 56, 0.85);
   }
 
   .tabular-nums {

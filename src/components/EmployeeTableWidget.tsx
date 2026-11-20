@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Building2,
@@ -17,6 +17,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import type {
   ConfirmedEmailSource,
   EmployeeRecord,
@@ -181,6 +182,8 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     number | null
   >(null);
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
+  const [pageTransitionDir, setPageTransitionDir] = useState<1 | -1>(1);
+  const pendingPageSnapRef = useRef(false);
   const listTopRef = useRef<HTMLDivElement>(null);
 
   const localQuery =
@@ -459,17 +462,36 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
     ? targetCompanyBatch
     : localPageLoadingTarget ?? safePage;
 
+  const renderedContactsPageKey = useServerBatchPagination
+    ? `server-${filterResult?.page ?? globalPage}`
+    : `local-${safePage}`;
+
+  useLayoutEffect(() => {
+    if (!pendingPageSnapRef.current) return;
+    pendingPageSnapRef.current = false;
+    if (autoScrollOnPagination) {
+      scrollToListTop(listTopRef.current, 88, 'instant');
+    }
+  }, [renderedContactsPageKey, autoScrollOnPagination]);
+
   const handleSelectCompanyBatch = (nextBatch: number) => {
     if (!onChangeGlobalPage) return;
     const bounded = Math.max(1, Math.min(totalCompanyBatches, nextBatch));
-    if (autoScrollOnPagination) {
-      scrollToListTop(listTopRef.current);
+    if (bounded === globalPage && !isServerBatchLoading) {
+      if (autoScrollOnPagination) {
+        scrollToListTop(listTopRef.current, 88, 'instant');
+      }
+      return;
     }
-    if (bounded === globalPage && !isServerBatchLoading) return;
+    setPageTransitionDir(bounded >= globalPage ? 1 : -1);
+    pendingPageSnapRef.current = true;
     if (isPageCached?.(bounded)) {
       setRequestedServerPage(null);
     } else {
       setRequestedServerPage(bounded);
+      if (autoScrollOnPagination) {
+        scrollToListTop(listTopRef.current, 88, 'instant');
+      }
     }
     updateCurrentPage(1);
     onChangeGlobalPage(bounded);
@@ -477,16 +499,20 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
 
   const handleSelectContactsPage = (nextPage: number) => {
     const bounded = Math.max(1, Math.min(totalPages, nextPage));
-    if (autoScrollOnPagination) {
-      scrollToListTop(listTopRef.current);
-    }
 
     if (useServerBatchPagination && onChangeGlobalPage) {
       handleSelectCompanyBatch(bounded);
       return;
     }
 
-    if (bounded === safePage) return;
+    if (bounded === safePage) {
+      if (autoScrollOnPagination) {
+        scrollToListTop(listTopRef.current, 88, 'instant');
+      }
+      return;
+    }
+    setPageTransitionDir(bounded >= safePage ? 1 : -1);
+    pendingPageSnapRef.current = true;
     if (localPageTimerRef.current !== null) {
       window.clearTimeout(localPageTimerRef.current);
       localPageTimerRef.current = null;
@@ -1170,10 +1196,14 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               }
             />
           )}
-          <div
+          <motion.div
+            key={`contacts-${renderedContactsPageKey}`}
+            initial={{ opacity: 0, y: pageTransitionDir > 0 ? 14 : -10 }}
+            animate={{ opacity: isPaginationLoading ? 0.55 : 1, y: 0 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
             aria-busy={isPaginationLoading}
-            className={`relative transition-opacity duration-150 ${
-              isPaginationLoading ? 'opacity-55 pointer-events-none' : ''
+            className={`relative ${
+              isPaginationLoading ? 'pointer-events-none' : ''
             }`}
           >
             {/* Mobile Touch Cards (md:hidden) — Full unshortened email display */}
@@ -1457,7 +1487,7 @@ export const EmployeeTableWidget: React.FC<EmployeeTableWidgetProps> = ({
               </tbody>
             </table>
           </SwipeableTableContainer>
-          </div>
+          </motion.div>
         </div>
       )}
 

@@ -2,12 +2,12 @@
   "id": "/",
   "name": "OrgLens Directory Explorer",
   "short_name": "OrgLens",
-  "description": "Modern glassy company employee directory explorer with public search indexing, workforce charts, customizable widgets, and offline sync.",
+  "description": "Find any company employees email address",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#090d16",
-  "theme_color": "#090d16",
+  "background_color": "#F6F4EE",
+  "theme_color": "#0E3B47",
   "icons": [
     {
       "src": "/icon.svg",

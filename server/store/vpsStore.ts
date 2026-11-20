@@ -159,7 +159,7 @@ export function createDefaultSettings(): PlatformSettings {
     enforceOneAccountPerDevice: true,
     strictHardwareFingerprintLock: true,
     announcementBanner: '',
-    companyTagline: 'Corporate email finder & Worldwide company explorer',
+    companyTagline: 'Find any company employees email address',
   };
 }
 

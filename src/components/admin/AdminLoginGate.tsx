@@ -51,7 +51,7 @@ export const AdminLoginGate: React.FC<AdminLoginGateProps> = ({
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center px-4 py-12 bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100">
+    <div className="min-h-screen flex flex-col justify-center items-center px-4 py-12 bg-bone-100 dark:bg-petrol-950 text-petrol-900 dark:text-bone-100">
       <div className="w-full max-w-md space-y-5">
         <button
           type="button"
@@ -156,7 +156,7 @@ export const AdminLoginGate: React.FC<AdminLoginGateProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold bg-slate-900 hover:bg-slate-800 dark:bg-sky-600 dark:hover:bg-sky-500 disabled:opacity-60 text-white transition-colors cursor-pointer"
+              className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-bold bg-lemon-400 hover:bg-lemon-300 disabled:opacity-60 text-petrol-950 border border-lemon-500/40 transition-colors cursor-pointer"
             >
               {loading ? (
                 <>

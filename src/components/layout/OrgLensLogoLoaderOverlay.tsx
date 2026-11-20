@@ -7,10 +7,10 @@ interface OrgLensLogoLoaderOverlayProps {
 }
 
 /**
- * White translucent overlay displayed on top of the active workspace dashboard
+ * Bone-white translucent overlay displayed on top of the active workspace dashboard
  * while initial directory & workspace state finishes loading after sign-in.
- * Dismantles the 6 core shapes of /public/icon.svg outward and reassembles them
- * cleanly in a smooth continuous loop.
+ * Dismantles the 6 core shapes of /public/icon.svg (Petrol Blue + Lemon Yellow + Bone White)
+ * outward and reassembles them cleanly in a smooth continuous loop.
  */
 export const OrgLensLogoLoaderOverlay: React.FC<
   OrgLensLogoLoaderOverlayProps
@@ -37,22 +37,22 @@ export const OrgLensLogoLoaderOverlay: React.FC<
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.28, ease: 'easeOut' }}
-          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white/82 backdrop-blur-md select-none"
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#F6F4EE]/86 backdrop-blur-md select-none"
         >
           <div className="relative flex flex-col items-center justify-center gap-5 px-6">
-            {/* Subtle halo behind dismantling logo */}
+            {/* Subtle Lemon-Petrol halo behind dismantling logo */}
             <motion.div
               aria-hidden="true"
               animate={{
                 scale: [0.92, 1.12, 0.94],
-                opacity: [0.25, 0.55, 0.25],
+                opacity: [0.25, 0.52, 0.25],
               }}
               transition={{
                 duration: 2.2,
                 repeat: Infinity,
                 ease: 'easeInOut',
               }}
-              className="absolute -top-6 h-40 w-40 rounded-full bg-sky-400/20 blur-2xl pointer-events-none"
+              className="absolute -top-6 h-40 w-40 rounded-full bg-lemon-400/25 blur-2xl pointer-events-none"
             />
 
             {/* Expanded viewBox (-32 to 160) gives room for logo pieces to dismantle outward cleanly */}
@@ -60,14 +60,14 @@ export const OrgLensLogoLoaderOverlay: React.FC<
               xmlns="http://www.w3.org/2000/svg"
               viewBox="-32 -32 192 192"
               fill="none"
-              className="relative h-32 w-32 drop-shadow-[0_14px_30px_rgba(15,23,42,0.16)] overflow-visible"
+              className="relative h-32 w-32 drop-shadow-[0_14px_30px_rgba(14,59,71,0.22)] overflow-visible"
             >
-              {/* 1. Outer Dark Navy Tile */}
+              {/* 1. Outer Petrol Blue Tile */}
               <motion.rect
                 width="128"
                 height="128"
                 rx="28"
-                fill="#0F172A"
+                fill="#0E3B47"
                 style={{ originX: '64px', originY: '64px' }}
                 animate={{
                   scale: [1, 0.88, 0.88, 1, 1],
@@ -77,31 +77,31 @@ export const OrgLensLogoLoaderOverlay: React.FC<
                 transition={loopTransition(0)}
               />
 
-              {/* 2. Inner Sky Telemetry Rim */}
+              {/* 2. Inner Lemon Yellow Rim */}
               <motion.rect
                 x="8"
                 y="8"
                 width="112"
                 height="112"
                 rx="22"
-                stroke="#38BDF8"
-                strokeOpacity="0.45"
+                stroke="#E8D438"
+                strokeOpacity="0.55"
                 strokeWidth="2.5"
                 style={{ originX: '64px', originY: '64px' }}
                 animate={{
                   scale: [1, 1.18, 1.18, 1, 1],
                   rotate: [0, 9, 9, 0, 0],
-                  strokeOpacity: [0.32, 0.78, 0.78, 0.32, 0.32],
+                  strokeOpacity: [0.38, 0.88, 0.88, 0.38, 0.38],
                 }}
                 transition={loopTransition(0.03)}
               />
 
-              {/* 3. Magnifying Lens Ring */}
+              {/* 3. Magnifying Lens Ring (Lemon Yellow) */}
               <motion.circle
                 cx="58"
                 cy="56"
                 r="24"
-                stroke="#38BDF8"
+                stroke="#E8D438"
                 strokeWidth="7"
                 style={{ originX: '58px', originY: '56px' }}
                 animate={{
@@ -113,10 +113,10 @@ export const OrgLensLogoLoaderOverlay: React.FC<
                 transition={loopTransition(0.05)}
               />
 
-              {/* 4. Diagonal Lens Handle */}
+              {/* 4. Diagonal Lens Handle (Lemon Yellow) */}
               <motion.path
                 d="M76 74L96 94"
-                stroke="#38BDF8"
+                stroke="#E8D438"
                 strokeWidth="7"
                 strokeLinecap="round"
                 style={{ originX: '86px', originY: '84px' }}
@@ -128,12 +128,12 @@ export const OrgLensLogoLoaderOverlay: React.FC<
                 transition={loopTransition(0.08)}
               />
 
-              {/* 5. Executive Head Silhouette */}
+              {/* 5. Executive Head Silhouette (Bone White) */}
               <motion.circle
                 cx="58"
                 cy="50"
                 r="6"
-                fill="#F8FAFC"
+                fill="#F6F4EE"
                 style={{ originX: '58px', originY: '50px' }}
                 animate={{
                   x: [0, 14, 14, 0, 0],
@@ -143,10 +143,10 @@ export const OrgLensLogoLoaderOverlay: React.FC<
                 transition={loopTransition(0.06)}
               />
 
-              {/* 6. Executive Shoulders Arc */}
+              {/* 6. Executive Shoulders Arc (Bone White) */}
               <motion.path
                 d="M46 66C48.5 60.5 52.8 58 58 58C63.2 58 67.5 60.5 70 66"
-                stroke="#F8FAFC"
+                stroke="#F6F4EE"
                 strokeWidth="5"
                 strokeLinecap="round"
                 style={{ originX: '58px', originY: '62px' }}
@@ -160,12 +160,12 @@ export const OrgLensLogoLoaderOverlay: React.FC<
             </svg>
 
             <div className="flex flex-col items-center text-center space-y-1.5">
-              <div className="flex items-center gap-1.5 font-display text-lg font-bold tracking-tight text-slate-900">
+              <div className="flex items-center gap-1.5 font-display text-lg font-bold tracking-tight text-petrol-900">
                 <span>Loading OrgLens</span>
                 <motion.span
-                  animate={{ opacity: [0.2, 1, 0.2] }}
+                  animate={{ opacity: [0.25, 1, 0.25] }}
                   transition={{ duration: 1.2, repeat: Infinity }}
-                  className="text-sky-600"
+                  className="text-petrol-600"
                 >
                   ...
                 </motion.span>
@@ -174,8 +174,8 @@ export const OrgLensLogoLoaderOverlay: React.FC<
                 {subtitle}
               </p>
 
-              {/* Sleek indeterminate sky progress rail */}
-              <div className="mt-2 h-1 w-44 overflow-hidden rounded-full bg-slate-200">
+              {/* Petrol-to-Lemon indeterminate progress rail */}
+              <div className="mt-2 h-1.5 w-44 overflow-hidden rounded-full bg-bone-300">
                 <motion.div
                   animate={{ x: ['-100%', '220%'] }}
                   transition={{
@@ -183,7 +183,7 @@ export const OrgLensLogoLoaderOverlay: React.FC<
                     repeat: Infinity,
                     ease: 'easeInOut',
                   }}
-                  className="h-full w-1/2 rounded-full bg-gradient-to-r from-sky-400 via-sky-600 to-sky-400"
+                  className="h-full w-1/2 rounded-full bg-gradient-to-r from-petrol-700 via-lemon-400 to-petrol-700"
                 />
               </div>
             </div>

@@ -1186,6 +1186,283 @@ export function countVaultCompaniesFast(
   return count;
 }
 
+const quickSearchRamCache = new Map<
+  string,
+  {
+    companies: GlobalCompanyItem[];
+    totalMatches: number;
+    expiresAt: number;
+  }
+>();
+
+/**
+ * Ultra-fast company & domain auto-suggest search for the Top Bar Quick Search.
+ * Matches BOTH company name (name_lower) and domain (normalized without http/www),
+ * prioritizes exact & prefix hits before broad substring hits, and returns up to `limit`
+ * ranked GlobalCompanyItem entries alongside a fast bounded total match count.
+ */
+export function quickSearchVaultCompanies(
+  rawQuery: string,
+  limit = 4
+): {
+  companies: GlobalCompanyItem[];
+  totalMatches: number;
+} {
+  const safeLimit = Math.max(1, Math.min(12, Math.floor(limit || 4)));
+  const cleanedRaw = rawQuery.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!cleanedRaw) {
+    return { companies: [], totalMatches: 0 };
+  }
+
+  const cleanDomainQuery = cleanedRaw
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .split(/[/?#]/)[0]
+    .trim();
+
+  const cacheKey = `${cleanedRaw}|${cleanDomainQuery}|${safeLimit}`;
+  const cached = quickSearchRamCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return {
+      companies: cached.companies,
+      totalMatches: cached.totalMatches,
+    };
+  }
+
+  const db = getDb();
+
+  type QuickRow = {
+    slug: string;
+    name: string;
+    domain: string | null;
+    website_url: string | null;
+    logo_url: string | null;
+    location: string;
+    country_slug: string | null;
+    industry: string;
+    employee_range: string;
+    revenue_range: string;
+    source_registry: string;
+    registry_id: string | null;
+    confirmed_email_count: number;
+  };
+
+  const selectCols = `SELECT slug, name, domain, website_url, logo_url, location, country_slug,
+    industry, employee_range, revenue_range, source_registry,
+    registry_id, confirmed_email_count
+    FROM companies`;
+
+  const domainGuard = "domain IS NOT NULL AND domain != '' AND domain LIKE '%.%'";
+  const prefixCandidates: QuickRow[] = [];
+
+  // Stage 0: Instant <1ms indexed exact domain & exact name hits (ensures stripe.com, apple.com, etc. always rank #1)
+  const domBase = cleanDomainQuery || cleanedRaw.replace(/\s+/g, '');
+  const exactDomains = Array.from(
+    new Set(
+      domBase.includes('.')
+        ? [domBase]
+        : [
+            `${domBase}.com`,
+            `${domBase}.io`,
+            `${domBase}.co`,
+            `${domBase}.ai`,
+            `${domBase}.org`,
+            `${domBase}.net`,
+          ]
+    )
+  );
+  const exactPlaceholders = exactDomains.map(() => '?').join(',');
+  const exactDomainRows = db
+    .prepare(
+      `${selectCols}
+       WHERE domain IN (${exactPlaceholders})
+       LIMIT 12`
+    )
+    .all(...exactDomains) as QuickRow[];
+  prefixCandidates.push(...exactDomainRows);
+
+  const exactNameRows = db
+    .prepare(
+      `${selectCols}
+       WHERE name_lower = ? AND ${domainGuard}
+       LIMIT 12`
+    )
+    .all(cleanedRaw) as QuickRow[];
+  prefixCandidates.push(...exactNameRows);
+
+  // Stage 1: Split prefix queries (avoids OR index-disable in SQLite; runs in <5ms via range scans)
+  const nameUpperBound = `${cleanedRaw}\uffff`;
+  const domPrefixBase = cleanDomainQuery || cleanedRaw;
+  const domUpperBound = `${domPrefixBase}\uffff`;
+
+  const domPrefixRows = db
+    .prepare(
+      `${selectCols}
+       WHERE domain >= ? AND domain < ? AND ${domainGuard}
+       LIMIT 60`
+    )
+    .all(domPrefixBase, domUpperBound) as QuickRow[];
+  prefixCandidates.push(...domPrefixRows);
+
+  const namePrefixRows = db
+    .prepare(
+      `${selectCols}
+       WHERE name_lower >= ? AND name_lower < ? AND ${domainGuard}
+       LIMIT 60`
+    )
+    .all(cleanedRaw, nameUpperBound) as QuickRow[];
+  prefixCandidates.push(...namePrefixRows);
+
+  // Stage 2: Substring / multi-token fallback ONLY when indexed exact/prefix hits found fewer than `safeLimit` unique companies
+  const quickUniqueCount = new Set(
+    prefixCandidates.map((r) => (r.domain || '').toLowerCase()).filter(Boolean)
+  ).size;
+
+  if (quickUniqueCount < safeLimit) {
+    const tokens = cleanedRaw
+      .split(/\s+/)
+      .filter((t) => t.length >= 2)
+      .slice(0, 4);
+
+    if (tokens.length > 1) {
+      const tokenWhere = tokens
+        .map(() => '(name_lower LIKE ? OR domain LIKE ?)')
+        .join(' AND ');
+      const tokenParams: string[] = [];
+      for (const tok of tokens) {
+        tokenParams.push(`%${tok}%`, `%${tok}%`);
+      }
+      const multiRows = db
+        .prepare(
+          `${selectCols}
+           WHERE ${domainGuard}
+             AND ${tokenWhere}
+           LIMIT 40`
+        )
+        .all(...tokenParams) as QuickRow[];
+      prefixCandidates.push(...multiRows);
+    } else {
+      const containsTerm = `%${cleanedRaw}%`;
+      const domContainsTerm = `%${domPrefixBase}%`;
+      const subRows = db
+        .prepare(
+          `${selectCols}
+           WHERE ${domainGuard}
+             AND (name_lower LIKE ? OR domain LIKE ?)
+           LIMIT 40`
+        )
+        .all(containsTerm, domContainsTerm) as QuickRow[];
+      prefixCandidates.push(...subRows);
+    }
+  }
+
+  // Deduplicate by normalized domain & filter invalid/suspect domains
+  const seenDomains = new Set<string>();
+  const validRows: QuickRow[] = [];
+  for (const r of prefixCandidates) {
+    if (!r.domain || !isValidDomain(r.domain)) continue;
+    if (isSuspectDomainQuickCheck(r.domain, r.slug, r.source_registry)) continue;
+    const normDom = normalizeDomain(r.domain);
+    if (!normDom || seenDomains.has(normDom)) continue;
+    seenDomains.add(normDom);
+    validRows.push(r);
+  }
+
+  const empRank: Record<string, number> = {
+    '10,000+': 7,
+    '5,001 - 10,000': 6,
+    '1,001 - 5,000': 5,
+    '501 - 1,000': 4,
+    '201 - 500': 3,
+    '51 - 200': 2,
+    '1 - 50': 1,
+  };
+
+  const scoreRow = (r: QuickRow): number => {
+    const n = r.name.toLowerCase();
+    const d = (r.domain || '').toLowerCase();
+    const domRoot = d.split('.')[0] || '';
+    const isDotCom = d.endsWith('.com');
+    let score = 0;
+
+    if (d === cleanDomainQuery || d === `${domBase}.com`) {
+      score += 1300;
+    } else if (domRoot === cleanDomainQuery || domRoot === domBase) {
+      score += isDotCom ? 1220 : 1040;
+    } else if (n === cleanedRaw) {
+      score += isDotCom ? 1120 : 980;
+    } else if (d.startsWith(domPrefixBase)) {
+      score += isDotCom ? 820 : 750;
+    } else if (n.startsWith(cleanedRaw)) {
+      score += isDotCom ? 780 : 710;
+    } else if (n.includes(` ${cleanedRaw}`)) {
+      score += 480;
+    } else if (d.includes(domPrefixBase)) {
+      score += 380;
+    } else if (n.includes(cleanedRaw)) {
+      score += 280;
+    } else {
+      score += 120;
+    }
+
+    // Prefer flagship confirmed rosters & richer profiles
+    if (r.confirmed_email_count > 0) {
+      score += Math.min(200, 60 + r.confirmed_email_count * 10);
+    }
+    if (r.logo_url) score += 35;
+    if (
+      r.source_registry === 'TheOrg Directory' ||
+      r.source_registry === 'Live Domain Discovery'
+    ) {
+      score += 45;
+    }
+    score += (empRank[r.employee_range] || 1) * 5;
+    score -= Math.min(25, Math.floor(d.length / 2));
+
+    return score;
+  };
+
+  validRows.sort((a, b) => {
+    const diff = scoreRow(b) - scoreRow(a);
+    if (diff !== 0) return diff;
+    return a.name.localeCompare(b.name);
+  });
+
+  const topRows = validRows.slice(0, safeLimit);
+
+  const companies: GlobalCompanyItem[] = topRows.map((r) => ({
+    id: r.registry_id || r.slug,
+    slug: r.slug,
+    name: r.name,
+    domain: r.domain || undefined,
+    websiteUrl:
+      r.website_url || (r.domain ? `https://${r.domain}` : undefined),
+    logoUrl: r.logo_url,
+    location: r.location,
+    industry: r.industry,
+    employeeRange: r.employee_range,
+    revenueRange: r.revenue_range,
+    sourceCountrySlug: r.country_slug || undefined,
+    sourceRegistry: r.source_registry,
+    confirmedEmailCount:
+      r.confirmed_email_count > 0 ? r.confirmed_email_count : undefined,
+  }));
+
+  const totalMatches = Math.max(companies.length, validRows.length);
+
+  if (quickSearchRamCache.size > 400) {
+    const oldest = quickSearchRamCache.keys().next().value;
+    if (oldest) quickSearchRamCache.delete(oldest);
+  }
+  quickSearchRamCache.set(cacheKey, {
+    companies,
+    totalMatches,
+    expiresAt: Date.now() + 120_000,
+  });
+
+  return { companies, totalMatches };
+}
+
 /**
  * Returns companies matching the active filters that have real org charts,
  * confirmed web contacts, cached rosters, or corporate registry officers so

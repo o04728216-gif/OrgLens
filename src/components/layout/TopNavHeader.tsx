@@ -4,17 +4,17 @@ import {
   Coins,
   Infinity as InfinityIcon,
   LogOut,
-  Search,
   ShieldCheck,
   Sparkles,
   UserCog,
 } from 'lucide-react';
 import type {
+  GlobalCompanyItem,
   PrimaryTab,
-  SessionMode,
   TopLevelAppView,
   UserAccountPublic,
 } from '../../types';
+import { TopBarQuickSearch } from './TopBarQuickSearch';
 
 export interface PrimaryTabConfig {
   id: PrimaryTab;
@@ -27,12 +27,10 @@ interface TopNavHeaderProps {
   user: UserAccountPublic;
   monthlyPriceUsdt?: number;
   appView: TopLevelAppView;
-  sessionMode: SessionMode;
-  activeTab: PrimaryTab;
-  primaryTabs: PrimaryTabConfig[];
   onBrandClick: () => void;
-  onSelectTab: (tab: PrimaryTab) => void;
-  onFocusDomainLookup: () => void;
+  onQuickSearchSelectCompany: (company: GlobalCompanyItem) => void;
+  onQuickSearchShowMore: (query: string) => void;
+  onQuickSearchDirectDomain: (domain: string) => void;
   onOpenProfile: () => void;
   onOpenUpgrade: () => void;
   onOpenAdmin: () => void;
@@ -43,12 +41,10 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   user,
   monthlyPriceUsdt = 15,
   appView,
-  sessionMode,
-  activeTab,
-  primaryTabs,
   onBrandClick,
-  onSelectTab,
-  onFocusDomainLookup,
+  onQuickSearchSelectCompany,
+  onQuickSearchShowMore,
+  onQuickSearchDirectDomain,
   onOpenProfile,
   onOpenUpgrade,
   onOpenAdmin,
@@ -71,8 +67,8 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   const isOutOfCoins = !user.hasActiveUnlimited && user.lensCoins <= 0;
 
   return (
-    <header className="sticky top-0 z-30 backdrop-blur-xl bg-white/85 dark:bg-[#090d16]/85 border-b border-slate-200/80 dark:border-slate-800/80">
-      <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-2 sm:gap-6 px-3.5 sm:px-6 lg:px-8 h-15 sm:h-16">
+    <header className="sticky top-0 z-30 bg-petrol-700/96 dark:bg-petrol-900/96 backdrop-blur-md border-b border-petrol-600/80 dark:border-petrol-800">
+      <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-2 sm:gap-4 px-3.5 sm:px-6 lg:px-8 h-15 sm:h-16">
         {/* Zone 1: Brand Wordmark */}
         <a
           href="/domain-lookup/full-names-emails"
@@ -80,43 +76,19 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
             e.preventDefault();
             onBrandClick();
           }}
-          className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
+          className="font-display text-lg font-bold tracking-tight text-bone-50 whitespace-nowrap shrink-0"
         >
           OrgLens
         </a>
 
-        {/* Zone 2: Clean Single-Line Nav Links */}
-        <nav
-          aria-label="Primary navigation"
-          className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300"
-        >
-          {primaryTabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => onSelectTab(tab.id)}
-              className={`underline-offset-4 hover:underline transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                appView === 'workspace' && activeTab === tab.id
-                  ? 'text-slate-900 dark:text-white font-semibold underline'
-                  : 'hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-          {sessionMode !== 'domain' && (
-            <button
-              type="button"
-              onClick={onFocusDomainLookup}
-              className="inline-flex items-center gap-1.5 underline-offset-4 hover:underline text-sky-700 dark:text-sky-400 hover:text-sky-600 dark:hover:text-sky-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Search className="h-3.5 w-3.5" />
-              <span>Domain Lookup</span>
-            </button>
-          )}
-        </nav>
+        {/* Zone 2: Quick Company & Domain Auto-Suggest Search */}
+        <TopBarQuickSearch
+          onSelectCompany={onQuickSearchSelectCompany}
+          onShowMore={onQuickSearchShowMore}
+          onDirectDomainLookup={onQuickSearchDirectDomain}
+        />
 
-        {/* Zone 3: Top-Right Lens Coin Counter + Account Menu */}
+        {/* Zone 3: Top-Right Lemon Coin CTA + Account Controls */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0" ref={menuRef}>
           <button
             type="button"
@@ -126,14 +98,14 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                 ? 'Unlimited Plan Active — View Billing & Lens Coin Ledger'
                 : `${user.lensCoins} Lens Coins remaining — Click to upgrade for Unlimited ($${monthlyPriceUsdt}/mo USDT)`
             }
-            className={`min-h-[38px] sm:min-h-0 inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`min-h-[38px] sm:min-h-0 inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
               user.hasActiveUnlimited
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-600'
+                ? 'bg-lemon-400 hover:bg-lemon-300 text-petrol-950 border-lemon-400'
                 : isOutOfCoins
                 ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-600'
                 : isLowCoins
-                ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-500'
-                : 'bg-sky-600 hover:bg-sky-500 text-white border-sky-600'
+                ? 'bg-amber-400 hover:bg-amber-300 text-petrol-950 border-amber-400'
+                : 'bg-lemon-400 hover:bg-lemon-300 text-petrol-950 border-lemon-400'
             }`}
           >
             {user.hasActiveUnlimited ? (
@@ -164,8 +136,8 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
             aria-label="Account Settings"
             className={`min-h-[38px] min-w-[38px] sm:min-h-0 sm:min-w-0 inline-flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               appView === 'profile'
-                ? 'bg-sky-600 text-white border-sky-600'
-                : 'bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800/90 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200/80 dark:border-slate-700/80'
+                ? 'bg-bone-50 text-petrol-900 border-bone-50 font-semibold'
+                : 'bg-petrol-800/80 hover:bg-petrol-600 text-bone-100 border-petrol-600/80'
             }`}
           >
             <UserCog className="h-3.5 w-3.5 shrink-0" />
@@ -177,23 +149,22 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
               type="button"
               onClick={() => setMenuOpen((v) => !v)}
               aria-expanded={menuOpen}
-              className="min-h-[38px] sm:min-h-0 inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800/90 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700/80 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="min-h-[38px] sm:min-h-0 inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium bg-petrol-800/80 hover:bg-petrol-600 text-bone-100 border border-petrol-600/80 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0" title="Single-Device Active Session" />
               <span className="max-w-[76px] sm:max-w-[110px] truncate">{user.fullName}</span>
-              <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+              <ChevronDown className="h-3.5 w-3.5 text-lemon-300" />
             </button>
 
             {menuOpen && (
-              <div className="absolute right-0 mt-2 w-60 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg py-1.5 z-50">
-                <div className="px-3.5 py-2.5 border-b border-slate-100 dark:border-slate-800">
-                  <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+              <div className="absolute right-0 mt-2 w-60 rounded-xl bg-bone-50 dark:bg-petrol-900 border border-bone-300 dark:border-petrol-700 shadow-lg py-1.5 z-50">
+                <div className="px-3.5 py-2.5 border-b border-bone-200 dark:border-petrol-800">
+                  <div className="text-xs font-semibold text-petrol-900 dark:text-bone-50 truncate">
                     {user.fullName}
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
                     {user.email}
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono tabular-nums">
+                  <div className="text-[11px] text-petrol-700 dark:text-lemon-300 mt-1 font-mono tabular-nums font-semibold">
                     {user.hasActiveUnlimited
                       ? 'Unlimited Plan Active'
                       : `${user.lensCoins.toLocaleString()} Lens Coins left`}
@@ -208,11 +179,11 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                   }}
                   className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium transition-colors text-left cursor-pointer ${
                     appView === 'profile'
-                      ? 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 font-semibold'
-                      : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/80'
+                      ? 'bg-petrol-100 dark:bg-petrol-800 text-petrol-900 dark:text-lemon-300 font-semibold'
+                      : 'text-petrol-800 dark:text-bone-200 hover:bg-bone-200/70 dark:hover:bg-petrol-800/80'
                   }`}
                 >
-                  <UserCog className="h-3.5 w-3.5 text-sky-500 shrink-0" />
+                  <UserCog className="h-3.5 w-3.5 text-petrol-600 dark:text-lemon-300 shrink-0" />
                   <span>Profile &amp; Settings</span>
                 </button>
 
@@ -222,9 +193,9 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                     setMenuOpen(false);
                     onOpenUpgrade();
                   }}
-                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-colors text-left cursor-pointer"
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-petrol-800 dark:text-bone-200 hover:bg-bone-200/70 dark:hover:bg-petrol-800/80 transition-colors text-left cursor-pointer"
                 >
-                  <Sparkles className="h-3.5 w-3.5 text-sky-500 shrink-0" />
+                  <Sparkles className="h-3.5 w-3.5 text-petrol-600 dark:text-lemon-300 shrink-0" />
                   <span>
                     {user.hasActiveUnlimited
                       ? 'Billing & Lens Coin Ledger'
@@ -239,14 +210,14 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                       setMenuOpen(false);
                       onOpenAdmin();
                     }}
-                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-petrol-800 dark:text-bone-200 hover:bg-bone-200/70 dark:hover:bg-petrol-800/80 transition-colors text-left cursor-pointer"
                   >
-                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <span>Admin Console</span>
                   </button>
                 )}
 
-                <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                <div className="my-1 border-t border-bone-200 dark:border-petrol-800" />
 
                 <button
                   type="button"

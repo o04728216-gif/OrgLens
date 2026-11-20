@@ -107,7 +107,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
   }
 
   return (
-    <div className="min-h-screen flex bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100">
+    <div className="min-h-screen flex bg-bone-100 dark:bg-petrol-950 text-petrol-900 dark:text-bone-100">
       <AdminSidebar
         activeSection={activeSection}
         onSelectSection={onSelectSection}

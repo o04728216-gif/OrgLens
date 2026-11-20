@@ -111,34 +111,34 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   ];
 
   const sidebarContent = (
-    <div className="h-full flex flex-col justify-between bg-white dark:bg-[#0c111d] border-r border-slate-200 dark:border-slate-800/90 w-68 shrink-0">
+    <div className="h-full flex flex-col justify-between bg-petrol-700 dark:bg-petrol-900 border-r border-petrol-600/80 dark:border-petrol-800 w-68 shrink-0 text-bone-50">
       <div className="p-4 space-y-5 overflow-y-auto">
         {/* Brand Header */}
         <div className="flex items-center justify-between px-2 pt-1">
           <div>
-            <div className="font-display text-base font-bold text-slate-900 dark:text-white">
+            <div className="font-display text-base font-bold text-bone-50">
               OrgLens Admin
             </div>
-            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+            <div className="text-[11px] text-bone-200/75">
               Self-Hosted VPS Control Plane
             </div>
           </div>
           <button
             type="button"
             onClick={onCloseMobile}
-            className="lg:hidden p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            className="lg:hidden p-1.5 rounded-lg text-bone-200 hover:bg-petrol-600 cursor-pointer"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* Indestructible Shield Card */}
-        <div className="rounded-xl p-3 bg-emerald-50/80 dark:bg-emerald-950/25 border border-emerald-200/80 dark:border-emerald-800/60 space-y-1">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+        <div className="rounded-xl p-3 bg-petrol-800/85 border border-petrol-600/80 space-y-1">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-lemon-300">
             <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
             <span>Root Shield Active</span>
           </div>
-          <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
+          <p className="text-[11px] text-bone-200/85 leading-snug">
             Root Admin is permanently protected on local VPS disk and can never
             self-destruct.
           </p>
@@ -159,8 +159,8 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
                 }}
                 className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
                   isActive
-                    ? 'bg-sky-600 text-white font-semibold'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80'
+                    ? 'bg-lemon-400 text-petrol-950 font-bold shadow-xs'
+                    : 'text-bone-100/90 hover:bg-petrol-600/80'
                 }`}
               >
                 <span className="flex items-center gap-2.5 min-w-0">
@@ -171,10 +171,10 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
                   <span
                     className={`font-mono tabular-nums text-[11px] px-1.5 py-0.5 rounded ${
                       isActive
-                        ? 'bg-white/20 text-white'
+                        ? 'bg-petrol-950/15 text-petrol-950 font-bold'
                         : item.highlightCount
-                        ? 'bg-amber-500 text-slate-950 font-bold'
-                        : 'text-slate-500 dark:text-slate-400'
+                        ? 'bg-lemon-400 text-petrol-950 font-bold'
+                        : 'text-bone-200/75'
                     }`}
                   >
                     {item.count.toLocaleString()}
@@ -187,11 +187,11 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       </div>
 
       {/* Bottom Actions */}
-      <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-2">
+      <div className="p-4 border-t border-petrol-600/80 dark:border-petrol-800 space-y-2">
         <button
           type="button"
           onClick={onReturnToWorkspace}
-          className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 transition-colors cursor-pointer"
+          className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold bg-bone-50 hover:bg-bone-200 text-petrol-950 transition-colors cursor-pointer"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           <span>Open Directory Explorer</span>
@@ -201,17 +201,17 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
           <button
             type="button"
             onClick={onToggleTheme}
-            className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/70 transition-colors cursor-pointer"
+            className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-medium border border-petrol-600 text-bone-100 hover:bg-petrol-600 transition-colors cursor-pointer"
           >
             {theme === 'dark' ? (
               <>
-                <Sun className="h-3.5 w-3.5" />
-                <span>Light</span>
+                <Sun className="h-3.5 w-3.5 text-lemon-300" />
+                <span>Bone Light</span>
               </>
             ) : (
               <>
-                <Moon className="h-3.5 w-3.5" />
-                <span>Dark</span>
+                <Moon className="h-3.5 w-3.5 text-lemon-300" />
+                <span>Petrol Dark</span>
               </>
             )}
           </button>
@@ -219,7 +219,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
           <button
             type="button"
             onClick={onLogout}
-            className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-medium border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors cursor-pointer"
+            className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-medium border border-rose-400/50 text-rose-200 hover:bg-rose-500/20 transition-colors cursor-pointer"
           >
             <LogOut className="h-3.5 w-3.5" />
             <span>Sign Out</span>

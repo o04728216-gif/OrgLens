@@ -39,32 +39,32 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
   ];
 
   return (
-    <div className="space-y-20 pt-12 pb-16">
-      {/* 1. Simple B2B Lens Coin & Unlimited Pricing (ABOVE Capabilities) */}
+    <div className="space-y-20 pt-14 pb-16">
+      {/* 1. Simple B2B Lens Coin & Unlimited Pricing */}
       <section id="pricing" className="space-y-8 scroll-mt-24">
         <div className="max-w-2xl space-y-2">
-          <p className="text-xs font-medium text-sky-600 dark:text-sky-400">
+          <p className="text-xs font-semibold text-petrol-600 dark:text-lemon-300">
             Simple B2B Lens Coin &amp; Unlimited Pricing
           </p>
-          <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white [text-wrap:balance]">
+          <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-petrol-900 dark:text-bone-50 [text-wrap:balance]">
             Pay per company with Lens Coins or unlock Unlimited Worldwide Pro for $
             {config.unlimitedMonthlyPriceUsdt}/month.
           </h2>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-          {/* Starter Tier */}
-          <div className="rounded-xl p-6 sm:p-8 bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 flex flex-col justify-between gap-6">
+          {/* Starter Tier — Bone White Surface */}
+          <div className="rounded-xl p-6 sm:p-8 bg-bone-50 dark:bg-petrol-900 border border-bone-300 dark:border-petrol-700 flex flex-col justify-between gap-6">
             <div className="space-y-4">
               <div>
                 <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   For outbound testing &amp; targeted prospecting
                 </p>
-                <h3 className="mt-1 font-display text-xl font-bold text-slate-900 dark:text-white">
+                <h3 className="mt-1 font-display text-xl font-bold text-petrol-900 dark:text-bone-50">
                   Lens Coin Workspace
                 </h3>
                 <div className="mt-3 flex items-baseline gap-2">
-                  <span className="font-display text-3xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">
+                  <span className="font-display text-3xl font-bold text-petrol-900 dark:text-bone-50 font-mono tabular-nums">
                     $0
                   </span>
                   <span className="text-xs text-slate-500 dark:text-slate-400">
@@ -73,30 +73,30 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
                 </div>
               </div>
 
-              <ul className="space-y-2.5 text-sm text-slate-600 dark:text-slate-300 pt-2">
+              <ul className="space-y-2.5 text-sm text-slate-600 dark:text-bone-300 pt-2">
                 <li className="flex items-start gap-2.5">
-                  <Check className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+                  <Check className="h-4 w-4 text-petrol-600 dark:text-lemon-300 shrink-0 mt-0.5" />
                   <span>
                     1 Lens Coin = 1 full company domain lookup or Filter Explorer
                     company reveal (all employees &amp; emails)
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <Check className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+                  <Check className="h-4 w-4 text-petrol-600 dark:text-lemon-300 shrink-0 mt-0.5" />
                   <span>
                     Zero coin deduction whenever a domain search returns no public
                     contacts
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <Check className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+                  <Check className="h-4 w-4 text-petrol-600 dark:text-lemon-300 shrink-0 mt-0.5" />
                   <span>
                     Repeat lookups on companies you already unlocked cost 0
                     additional Lens Coins
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <Check className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+                  <Check className="h-4 w-4 text-petrol-600 dark:text-lemon-300 shrink-0 mt-0.5" />
                   <span>
                     Full access to CSV export, Command Hierarchy, and Worldwide
                     Filter Explorer
@@ -108,38 +108,38 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
             <button
               type="button"
               onClick={() => onFocusAuthCard('signup')}
-              className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white transition-colors cursor-pointer"
+              className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold bg-petrol-700 hover:bg-petrol-600 text-bone-50 transition-colors cursor-pointer"
             >
               <span>Create Workspace Account</span>
               <ArrowRight className="h-4 w-4" />
             </button>
           </div>
 
-          {/* Unlimited Tier ($15/month) */}
-          <div className="rounded-xl p-6 sm:p-8 bg-white dark:bg-slate-900/90 border border-sky-500/60 dark:border-sky-500/50 flex flex-col justify-between gap-6">
+          {/* Unlimited Tier ($15/month) — Signature Deep Petrol Blue Anchor Card with Lemon Yellow CTA */}
+          <div className="rounded-xl p-6 sm:p-8 bg-petrol-700 dark:bg-petrol-800 border border-petrol-600 dark:border-lemon-400/45 text-bone-50 flex flex-col justify-between gap-6 shadow-sm">
             <div className="space-y-4">
               <div>
-                <p className="text-xs font-medium text-sky-600 dark:text-sky-400">
+                <p className="text-xs font-semibold text-lemon-300">
                   For high-volume B2B agencies, SDRs &amp; recruiters
                 </p>
-                <h3 className="mt-1 font-display text-xl font-bold text-slate-900 dark:text-white">
+                <h3 className="mt-1 font-display text-xl font-bold text-bone-50">
                   Unlimited Worldwide Pro
                 </h3>
                 <div className="mt-3 flex items-baseline gap-2">
-                  <span className="font-display text-3xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">
+                  <span className="font-display text-3xl font-bold text-bone-50 font-mono tabular-nums">
                     ${config.unlimitedMonthlyPriceUsdt}
                   </span>
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                  <span className="text-xs text-bone-200/80">
                     USDT / month · {config.usdtNetworkLabel}
                   </span>
                 </div>
               </div>
 
-              <ul className="space-y-2.5 text-sm text-slate-600 dark:text-slate-300 pt-2">
+              <ul className="space-y-2.5 text-sm text-bone-100/90 pt-2">
                 <li className="flex items-start gap-2.5">
-                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                  <Check className="h-4 w-4 text-lemon-300 shrink-0 mt-0.5" />
                   <span>
-                    <strong className="text-slate-900 dark:text-white">
+                    <strong className="text-bone-50">
                       Unlimited domain lookups
                     </strong>{' '}
                     and unlimited company email reveals for{' '}
@@ -147,21 +147,21 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                  <Check className="h-4 w-4 text-lemon-300 shrink-0 mt-0.5" />
                   <span>
                     Unlimited Filter Explorer company drilldowns across 100M+
                     worldwide organizations
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                  <Check className="h-4 w-4 text-lemon-300 shrink-0 mt-0.5" />
                   <span>
                     Instant on-chain TRON (TRC20) TxID verification with zero bank
                     cards or middlemen
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                  <Check className="h-4 w-4 text-lemon-300 shrink-0 mt-0.5" />
                   <span>Direct priority onboarding &amp; billing Support</span>
                 </li>
               </ul>
@@ -171,7 +171,7 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
               <button
                 type="button"
                 onClick={() => onFocusAuthCard('signup')}
-                className="flex-1 inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+                className="flex-1 inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-bold bg-lemon-400 hover:bg-lemon-300 text-petrol-950 transition-colors cursor-pointer"
               >
                 <span>Get Started Now</span>
                 <ArrowRight className="h-4 w-4" />
@@ -180,9 +180,9 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
                 href={config.supportTelegramUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
+                className="inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium border border-bone-200/30 text-bone-100 hover:bg-petrol-600 transition-colors whitespace-nowrap"
               >
-                <Send className="h-3.5 w-3.5 text-sky-500" />
+                <Send className="h-3.5 w-3.5 text-lemon-300" />
                 <span>Support</span>
               </a>
             </div>
@@ -190,13 +190,13 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
         </div>
       </section>
 
-      {/* 2. B2B Outbound & Recruiting Infrastructure (UNDER Simple B2B Lens Coin & Unlimited Pricing) */}
+      {/* 2. B2B Outbound & Recruiting Infrastructure */}
       <section id="capabilities" className="space-y-8 scroll-mt-24">
         <div className="max-w-2xl space-y-2">
-          <p className="text-xs font-medium text-sky-600 dark:text-sky-400">
+          <p className="text-xs font-semibold text-petrol-600 dark:text-lemon-300">
             B2B Outbound &amp; Recruiting Infrastructure
           </p>
-          <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white [text-wrap:balance]">
+          <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-petrol-900 dark:text-bone-50 [text-wrap:balance]">
             Built for revenue teams that need verified corporate directories without bloated enterprise contracts
           </h2>
         </div>
@@ -205,22 +205,22 @@ export const LandingSections: React.FC<LandingSectionsProps> = ({
           {capabilities.map((cap, idx) => (
             <div
               key={cap.num}
-              className={`rounded-xl p-6 bg-white dark:bg-slate-900/70 border border-slate-200/90 dark:border-slate-800/90 flex flex-col justify-between gap-5 ${
+              className={`rounded-xl p-6 bg-bone-50 dark:bg-petrol-900 border border-bone-300 dark:border-petrol-700/90 flex flex-col justify-between gap-5 ${
                 idx === 0 || idx === 3 ? 'md:col-span-2' : 'md:col-span-1'
               }`}
             >
               <div className="space-y-2.5">
-                <h3 className="font-display text-lg font-semibold text-slate-900 dark:text-white">
-                  <span className="font-mono tabular-nums text-sky-600 dark:text-sky-400 mr-2">
+                <h3 className="font-display text-lg font-semibold text-petrol-900 dark:text-bone-50">
+                  <span className="font-mono tabular-nums text-petrol-600 dark:text-lemon-300 mr-2">
                     {cap.num}
                   </span>
                   {cap.title}
                 </h3>
-                <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-300 max-w-[68ch]">
+                <p className="text-sm leading-relaxed text-slate-600 dark:text-bone-300 max-w-[68ch]">
                   {cap.body}
                 </p>
               </div>
-              <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+              <div className="pt-3 border-t border-bone-200 dark:border-petrol-800 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
                 {cap.metric}
               </div>
             </div>

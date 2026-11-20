@@ -280,7 +280,7 @@ export const UsdtUpgradePage: React.FC<UsdtUpgradePageProps> = ({
               <button
                 type="submit"
                 disabled={submittingPayment}
-                className="w-full inline-flex items-center justify-center gap-2 py-3 px-4 rounded-lg text-sm font-semibold bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white transition-colors cursor-pointer"
+                className="w-full inline-flex items-center justify-center gap-2 py-3 px-4 rounded-lg text-sm font-bold bg-lemon-400 hover:bg-lemon-300 disabled:opacity-60 text-petrol-950 border border-lemon-500/40 transition-colors cursor-pointer"
               >
                 {submittingPayment ? (
                   <>

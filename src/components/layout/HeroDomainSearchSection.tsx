@@ -66,15 +66,18 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
   onDismissStatusBanner,
 }) => {
   return (
-    <section className="rounded-2xl backdrop-blur-xl bg-white/80 dark:bg-slate-900/70 border border-slate-200/85 dark:border-slate-800/85 p-4 sm:p-7 shadow-xs">
+    <section className="rounded-2xl bg-bone-50 dark:bg-petrol-900 border border-bone-300 dark:border-petrol-700/90 p-4 sm:p-6 shadow-xs">
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         <div className="max-w-2xl min-w-0">
           <h1
             style={{ textWrap: 'balance' }}
-            className="font-display text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-slate-900 dark:text-white"
+            className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold tracking-tight text-petrol-900 dark:text-bone-50"
           >
-            Corporate email finder &amp; Worldwide company explorer
+            Find any company employees email address
           </h1>
+          <p className="mt-1 text-xs text-slate-600 dark:text-bone-300">
+            Type any company domain below to pull verified work emails, or switch to Filter Explorer to browse worldwide organizations.
+          </p>
         </div>
 
         {/* Mobile Filter Trigger + Utility Controls */}
@@ -89,8 +92,8 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
             onClick={onToggleWidgetsDrawer}
             className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 ${
               showWidgetsDrawer
-                ? 'border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300'
-                : 'border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                ? 'border-petrol-700 bg-petrol-700 text-bone-50 dark:border-lemon-400 dark:bg-lemon-400 dark:text-petrol-950 font-semibold'
+                : 'border-bone-300 dark:border-petrol-700 bg-bone-100 dark:bg-petrol-950/70 text-petrol-800 dark:text-bone-200 hover:bg-bone-200 dark:hover:bg-petrol-800'
             }`}
           >
             <LayoutGrid className="h-3.5 w-3.5" />
@@ -102,8 +105,8 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
             onClick={onToggleSimulateOffline}
             className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 ${
               effectiveOffline
-                ? 'border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-200'
-                : 'border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                ? 'border-lemon-500 bg-lemon-100 dark:bg-lemon-500/20 text-petrol-950 dark:text-lemon-200 font-semibold'
+                : 'border-bone-300 dark:border-petrol-700 bg-bone-100 dark:bg-petrol-950/70 text-petrol-800 dark:text-bone-200 hover:bg-bone-200 dark:hover:bg-petrol-800'
             }`}
           >
             <CloudOff className="h-3.5 w-3.5" />
@@ -116,17 +119,17 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
             type="button"
             onClick={onToggleTheme}
             aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border border-bone-300 dark:border-petrol-700 bg-bone-100 dark:bg-petrol-950/70 text-petrol-800 dark:text-bone-200 hover:bg-bone-200 dark:hover:bg-petrol-800 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
           >
             {theme === 'dark' ? (
               <>
-                <Sun className="h-3.5 w-3.5 text-amber-400" />
-                Light
+                <Sun className="h-3.5 w-3.5 text-lemon-300" />
+                Bone Light
               </>
             ) : (
               <>
-                <Moon className="h-3.5 w-3.5 text-slate-700" />
-                Dark
+                <Moon className="h-3.5 w-3.5 text-petrol-700" />
+                Petrol Dark
               </>
             )}
           </button>
@@ -135,7 +138,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
             <button
               type="button"
               onClick={onInstallApp}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold border border-petrol-600/40 bg-petrol-100 dark:bg-petrol-800 text-petrol-800 dark:text-lemon-300 hover:bg-petrol-200/70 dark:hover:bg-petrol-700 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
             >
               <Smartphone className="h-3.5 w-3.5" />
               Install App
@@ -144,11 +147,11 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
         </div>
       </div>
 
-      {/* Domain Search Form */}
+      {/* Domain Search Form — Unmistakable Lemon Yellow Search Action */}
       <form onSubmit={onSubmitDomain} className="mt-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3">
           <div className="relative flex-1 min-w-0">
-            <Globe className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 dark:text-slate-500" />
+            <Globe className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-petrol-500 dark:text-lemon-300" />
             <input
               ref={searchInputRef}
               type="text"
@@ -156,7 +159,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
               onChange={(e) => onChangeDomainInput(e.target.value)}
               placeholder="Enter any company domain (e.g., shopify.com, vercel.com)"
               aria-label="Company domain name"
-              className="w-full min-h-[46px] sm:min-h-0 pl-10 pr-4 py-2.5 rounded-xl font-mono text-base sm:text-sm bg-white dark:bg-slate-950/80 border border-slate-300/90 dark:border-slate-800 text-slate-900 dark:text-white placeholder:font-sans placeholder:text-xs placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 transition-colors"
+              className="w-full min-h-[46px] sm:min-h-0 pl-10 pr-4 py-2.5 rounded-xl font-mono text-base sm:text-sm bg-bone-100 dark:bg-petrol-950 border border-bone-300 dark:border-petrol-700 text-petrol-900 dark:text-bone-50 placeholder:font-sans placeholder:text-xs placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-lemon-400/70 focus:border-petrol-600 transition-colors"
             />
           </div>
 
@@ -164,7 +167,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
             <button
               type="submit"
               disabled={isDomainLoading}
-              className="min-h-[46px] sm:min-h-0 flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-60 shadow-xs transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[46px] sm:min-h-0 flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold bg-lemon-400 hover:bg-lemon-300 text-petrol-950 border border-lemon-500/40 disabled:opacity-60 shadow-xs transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
             >
               {isDomainLoading ? (
                 <>
@@ -194,7 +197,7 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
                     onRefreshCurrentDomain(currentDomainResult.domain)
                   }
                   title="Refresh organization directory and verified contacts"
-                  className="min-h-[46px] sm:min-h-0 px-4 py-2.5 rounded-xl text-sm font-medium border border-slate-200/90 dark:border-slate-800 bg-white/80 dark:bg-slate-950/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
+                  className="min-h-[46px] sm:min-h-0 px-4 py-2.5 rounded-xl text-sm font-medium border border-bone-300 dark:border-petrol-700 bg-bone-100 dark:bg-petrol-950 text-petrol-800 dark:text-bone-200 hover:bg-bone-200 dark:hover:bg-petrol-800 disabled:opacity-50 transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   Refresh
                 </button>
@@ -216,10 +219,10 @@ export const HeroDomainSearchSection: React.FC<HeroDomainSearchSectionProps> = (
               statusBanner.tone === 'error'
                 ? 'border-rose-500/35 bg-rose-500/10 text-rose-800 dark:text-rose-200'
                 : statusBanner.tone === 'warning'
-                ? 'border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                ? 'border-lemon-500/50 bg-lemon-100/70 dark:bg-lemon-500/15 text-petrol-950 dark:text-lemon-200'
                 : statusBanner.tone === 'success'
-                ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200'
-                : 'border-sky-500/35 bg-sky-500/10 text-sky-800 dark:text-sky-200'
+                ? 'border-emerald-600/35 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200'
+                : 'border-petrol-500/35 bg-petrol-100/70 dark:bg-petrol-800/80 text-petrol-900 dark:text-bone-100'
             }`}
           >
             <span>{statusBanner.text}</span>

@@ -93,7 +93,7 @@ export const PaginationControls: React.FC<PaginationControlsProps> = ({
               onClick={() => onSelectPage(pg)}
               className={`inline-flex items-center justify-center gap-1.5 min-w-[42px] min-h-[42px] sm:min-w-9 sm:min-h-9 px-2.5 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors cursor-pointer ${
                 active || isTargetLoading
-                  ? 'bg-sky-600 text-white shadow-xs border border-sky-600'
+                  ? 'bg-lemon-400 text-petrol-950 font-bold shadow-xs border border-lemon-500/50'
                   : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-60'
               }`}
             >

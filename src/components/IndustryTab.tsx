@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpDown,
   Check,
@@ -9,6 +9,7 @@ import {
   Loader2,
   Users,
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import type {
   FilterExplorerResponse,
   FilterFacetsResponse,
@@ -167,6 +168,8 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
     number | null
   >(null);
   const [requestedPage, setRequestedPage] = useState<number | null>(null);
+  const [pageTransitionDir, setPageTransitionDir] = useState<1 | -1>(1);
+  const pendingPageSnapRef = useRef(false);
   const [quickViewTarget, setQuickViewTarget] = useState<QuickViewTarget | null>(
     null
   );
@@ -390,20 +393,30 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
         )));
 
   const targetPaginationPage = requestedPage ?? globalPage;
+  const renderedDirectoryPage = activeDirectorySource?.page ?? globalPage;
+
+  useLayoutEffect(() => {
+    if (!pendingPageSnapRef.current) return;
+    pendingPageSnapRef.current = false;
+    scrollToListTop(listTopRef.current, 88, 'instant');
+  }, [renderedDirectoryPage]);
 
   const handleSelectPage = (nextPage: number) => {
     const bounded = Math.max(1, Math.min(coherentTotalPages, nextPage));
     if (bounded === globalPage && !isPaginationLoading) {
-      scrollToListTop(listTopRef.current);
+      scrollToListTop(listTopRef.current, 88, 'instant');
       return;
     }
+    setPageTransitionDir(bounded >= globalPage ? 1 : -1);
+    pendingPageSnapRef.current = true;
     // Instant 0ms swap for already-fetched/prefetched pages — zero loading dim or spinner!
     if (isPageCached?.(bounded)) {
       setRequestedPage(null);
     } else {
       setRequestedPage(bounded);
+      // Reposition cleanly without physical scroll-up drag while server fetches the page
+      scrollToListTop(listTopRef.current, 88, 'instant');
     }
-    scrollToListTop(listTopRef.current);
     onChangeGlobalPage(bounded);
   };
 
@@ -670,10 +683,14 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
               rightMeta="Fetching 500 companies on demand"
             />
           )}
-          <div
+          <motion.div
+            key={`companies-page-${renderedDirectoryPage}`}
+            initial={{ opacity: 0, y: pageTransitionDir > 0 ? 14 : -10 }}
+            animate={{ opacity: isPaginationLoading ? 0.55 : 1, y: 0 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
             aria-busy={isPaginationLoading}
-            className={`relative transition-opacity duration-150 ${
-              isPaginationLoading ? 'opacity-55 pointer-events-none' : ''
+            className={`relative ${
+              isPaginationLoading ? 'pointer-events-none' : ''
             }`}
           >
             {/* Mobile Touch Cards (md:hidden) */}
@@ -1043,7 +1060,7 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
               </tbody>
             </table>
           </SwipeableTableContainer>
-          </div>
+          </motion.div>
         </div>
       )}
 
