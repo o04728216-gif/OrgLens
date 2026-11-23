@@ -754,3 +754,140 @@ export function estimateIndexedContactsForRange(employeeRange: string): number {
   }
 }
 
+const CANONICAL_REVENUE_SET = new Set(COMPANY_REVENUE_RANGES);
+
+function formatCompactRevenueNumber(num: number): string {
+  if (!Number.isFinite(num) || num <= 0) return '';
+  if (num >= 100) return Math.round(num).toString();
+  if (num >= 10) return Number(num.toFixed(1)).toString();
+  return Number(num.toFixed(2)).toString();
+}
+
+function normalizeRevenueUnit(
+  rawUnit: string
+): 'K' | 'M' | 'B' | 'T' | null {
+  const u = rawUnit.trim().toLowerCase();
+  if (u === 't' || u === 'tn' || u === 'trillion') return 'T';
+  if (u === 'b' || u === 'bn' || u === 'billion') return 'B';
+  if (u === 'm' || u === 'mn' || u === 'million') return 'M';
+  if (u === 'k' || u === 'thousand') return 'K';
+  return null;
+}
+
+function formatSingleCurrencyToken(
+  prefix: string,
+  currency: string,
+  rawNumber: string,
+  rawUnit: string,
+  plusSign: string
+): string | undefined {
+  const unit = normalizeRevenueUnit(rawUnit);
+  if (!unit) return undefined;
+
+  const numeric = Number.parseFloat(rawNumber.replace(/,/g, ''));
+  if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
+
+  let scaledNum = numeric;
+  let scaledUnit: 'K' | 'M' | 'B' | 'T' = unit;
+
+  // Promote oversized values like "$2,168M" -> "$2.17B" or "$1,500B" -> "$1.5T"
+  if (scaledUnit === 'K' && scaledNum >= 1000) {
+    scaledNum /= 1000;
+    scaledUnit = 'M';
+  }
+  if (scaledUnit === 'M' && scaledNum >= 1000) {
+    scaledNum /= 1000;
+    scaledUnit = 'B';
+  }
+  if (scaledUnit === 'B' && scaledNum >= 1000) {
+    scaledNum /= 1000;
+    scaledUnit = 'T';
+  }
+
+  // Reject implausible corporate revenue figures (> $10T or < $10K)
+  if (scaledUnit === 'T' && scaledNum > 10) return undefined;
+  if (scaledUnit === 'K' && scaledNum < 10) return undefined;
+
+  const numText = formatCompactRevenueNumber(scaledNum);
+  if (!numText) return undefined;
+
+  const cleanPrefix =
+    prefix === '<' ? '<' : prefix === 'under' ? 'Under ' : '';
+  const cleanPlus = plusSign === '+' ? '+' : '';
+  return `${cleanPrefix}${currency}${numText}${scaledUnit}${cleanPlus}`;
+}
+
+/**
+ * Validates and formats raw scraped or cached revenue text (e.g. from ZoomInfo / Wikipedia).
+ * Strictly rejects malformed, trailing-punctuation, or unitless snippets such as "$2.168" or "€36.8,"
+ * so callers cleanly fall back to the verified revenue bracket.
+ */
+export function sanitizeRevenueDisplay(
+  raw?: string | null
+): string | undefined {
+  if (!raw || typeof raw !== 'string') return undefined;
+
+  const cleaned = raw
+    .replace(/\u00A0/g, ' ')
+    .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
+    .replace(/[–—]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[,;:.]+$/, '')
+    .trim();
+
+  if (!cleaned || cleaned.length > 48) return undefined;
+
+  // Canonical revenue brackets always pass cleanly
+  if (CANONICAL_REVENUE_SET.has(cleaned)) {
+    return cleaned;
+  }
+
+  // Reject strings containing multiple currency symbols unless it's a clean "A - B" range
+  const currencyHits = cleaned.match(/[\$€£]/g) || [];
+  if (currencyHits.length > 2) return undefined;
+
+  // Clean range format: e.g. "$10M - $50M" or "$50 million - $100 million"
+  const rangeMatch = cleaned.match(
+    /^(?:US|USD|CA|CAD|AU|AUD|EU|EUR|GB|GBP)?\s*([\$€£])\s*(\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?)\s*(trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)\s*-\s*(?:US|USD|CA|CAD|AU|AUD|EU|EUR|GB|GBP)?\s*([\$€£])?\s*(\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?)\s*(trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)(\+)?$/i
+  );
+  if (rangeMatch) {
+    const low = formatSingleCurrencyToken(
+      '',
+      rangeMatch[1],
+      rangeMatch[2],
+      rangeMatch[3],
+      ''
+    );
+    const high = formatSingleCurrencyToken(
+      '',
+      rangeMatch[4] || rangeMatch[1],
+      rangeMatch[5],
+      rangeMatch[6],
+      rangeMatch[7] || ''
+    );
+    if (low && high) return `${low} - ${high}`;
+    return undefined;
+  }
+
+  // Single unit-qualified revenue value: e.g. "$2.168 billion", "€36.8B", "<$5M", "Under $1M", "$500M+"
+  const singleMatch = cleaned.match(
+    /^(under\s+|<\s*)?(?:US|USD|CA|CAD|AU|AUD|EU|EUR|GB|GBP)?\s*([\$€£])\s*(\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?)\s*(trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)(\+)?$/i
+  );
+  if (singleMatch) {
+    const prefix = singleMatch[1]
+      ? singleMatch[1].trim().toLowerCase()
+      : '';
+    return formatSingleCurrencyToken(
+      prefix,
+      singleMatch[2],
+      singleMatch[3],
+      singleMatch[4],
+      singleMatch[5] || ''
+    );
+  }
+
+  return undefined;
+}
+
+

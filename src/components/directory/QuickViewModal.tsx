@@ -21,6 +21,7 @@ import type { GlobalCompanyItem, SearchResponse } from '../../types.ts';
 import { apiFetch } from '../../utils/authClient.ts';
 import { copyTextToClipboard } from '../../utils/offlineStorage.ts';
 import { truncateIndustry20 } from '../../utils/emailFormulas.ts';
+import { sanitizeRevenueDisplay } from '../../utils/geographyAndRevenue.ts';
 import { CompanyLogoAvatar } from './CompanyLogoAvatar.tsx';
 
 export type QuickViewTarget = {
@@ -156,8 +157,9 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
     comp.employeeRange ||
     '—';
   const effectiveRevenue =
-    companyPreview?.zoomInfoIntel?.revenue ||
-    companyPreview?.revenueRange ||
+    sanitizeRevenueDisplay(companyPreview?.zoomInfoIntel?.revenue) ||
+    sanitizeRevenueDisplay(companyPreview?.revenueRange) ||
+    sanitizeRevenueDisplay(comp.revenueRange) ||
     comp.revenueRange ||
     '—';
   const effectivePattern =
