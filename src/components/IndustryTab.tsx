@@ -174,7 +174,45 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
   const [quickViewTarget, setQuickViewTarget] = useState<QuickViewTarget | null>(
     null
   );
+  const LAST_QUICK_VIEWED_STORAGE_KEY = 'orglens:lastQuickViewedCompanyKey';
+  const [lastQuickViewedKey, setLastQuickViewedKey] = useState<string | null>(
+    () => {
+      try {
+        return window.localStorage.getItem(LAST_QUICK_VIEWED_STORAGE_KEY);
+      } catch {
+        return null;
+      }
+    }
+  );
   const listTopRef = useRef<HTMLDivElement>(null);
+
+  const getCompanyTrackKey = (comp: GlobalCompanyItem): string =>
+    (comp.domain || comp.slug || comp.id || comp.name || '')
+      .trim()
+      .toLowerCase();
+
+  const openCompanyQuickView = (comp: GlobalCompanyItem) => {
+    const trackKey = getCompanyTrackKey(comp);
+    setQuickViewTarget({ kind: 'company', company: comp });
+    if (trackKey) {
+      setLastQuickViewedKey(trackKey);
+      try {
+        window.localStorage.setItem(LAST_QUICK_VIEWED_STORAGE_KEY, trackKey);
+      } catch {
+        // Ignore storage quota / privacy mode errors
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleStorageSync = (e: StorageEvent) => {
+      if (e.key === LAST_QUICK_VIEWED_STORAGE_KEY) {
+        setLastQuickViewedKey(e.newValue);
+      }
+    };
+    window.addEventListener('storage', handleStorageSync);
+    return () => window.removeEventListener('storage', handleStorageSync);
+  }, []);
 
   useEffect(() => {
     if (!isFilterLoading && !globalDirectoryLoading) {
@@ -742,11 +780,19 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
               const webCopyId = `web:${comp.id}`;
               const isNameCopied = copiedKey === nameCopyId;
               const isWebCopied = copiedKey === webCopyId;
+              const isLastQuickViewed =
+                Boolean(lastQuickViewedKey) &&
+                getCompanyTrackKey(comp) === lastQuickViewedKey;
 
               return (
                 <div
                   key={comp.id}
-                  className="rounded-xl p-3.5 border border-slate-200/85 dark:border-slate-800/85 bg-white/85 dark:bg-slate-950/55 space-y-3 [content-visibility:auto] [contain-intrinsic-size:150px]"
+                  data-last-quick-viewed={isLastQuickViewed ? 'true' : undefined}
+                  className={`rounded-xl p-3.5 border space-y-3 transition-colors [content-visibility:auto] [contain-intrinsic-size:150px] ${
+                    isLastQuickViewed
+                      ? 'border-purple-400 dark:border-purple-500/80 bg-purple-100/90 dark:bg-purple-950/60 ring-1 ring-purple-500/35'
+                      : 'border-slate-200/85 dark:border-slate-800/85 bg-white/85 dark:bg-slate-950/55'
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-2.5">
                     <div className="flex items-start gap-2.5 min-w-0">
@@ -837,12 +883,20 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
 
                     <button
                       type="button"
-                      onClick={() =>
-                        setQuickViewTarget({ kind: 'company', company: comp })
-                      }
-                      className="min-h-[40px] inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200 cursor-pointer"
+                      onClick={() => openCompanyQuickView(comp)}
+                      className={`min-h-[40px] inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${
+                        isLastQuickViewed
+                          ? 'border-purple-600 dark:border-purple-400 bg-purple-600 dark:bg-purple-500 text-white'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200'
+                      }`}
                     >
-                      <Eye className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
+                      <Eye
+                        className={`h-3.5 w-3.5 shrink-0 ${
+                          isLastQuickViewed
+                            ? 'text-white'
+                            : 'text-sky-600 dark:text-sky-400'
+                        }`}
+                      />
                       <span>Quick</span>
                     </button>
 
@@ -947,11 +1001,21 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                   const webCopyId = `web:${comp.id}`;
                   const isNameCopied = copiedKey === nameCopyId;
                   const isWebCopied = copiedKey === webCopyId;
+                  const isLastQuickViewed =
+                    Boolean(lastQuickViewedKey) &&
+                    getCompanyTrackKey(comp) === lastQuickViewedKey;
 
                   return (
                     <tr
                       key={comp.id}
-                      className="hover:bg-petrol-500/[0.04] dark:hover:bg-lemon-400/[0.05] transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:48px]"
+                      data-last-quick-viewed={
+                        isLastQuickViewed ? 'true' : undefined
+                      }
+                      className={`transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:48px] ${
+                        isLastQuickViewed
+                          ? 'bg-purple-100/90 dark:bg-purple-950/60 hover:bg-purple-200/80 dark:hover:bg-purple-900/65 shadow-[inset_4px_0_0_0_#9333ea,inset_0_1px_0_0_rgba(147,51,234,0.22),inset_0_-1px_0_0_rgba(147,51,234,0.22)] dark:shadow-[inset_4px_0_0_0_#c084fc,inset_0_1px_0_0_rgba(192,132,252,0.28),inset_0_-1px_0_0_rgba(192,132,252,0.28)]'
+                          : 'hover:bg-petrol-500/[0.04] dark:hover:bg-lemon-400/[0.05]'
+                      }`}
                     >
                       <td className="py-2 px-2.5 whitespace-nowrap max-w-[230px]">
                         <div className="flex items-center gap-1.5 min-w-0">
@@ -1050,14 +1114,15 @@ export const IndustryTab: React.FC<IndustryTabProps> = ({
                           onMouseEnter={() => onPrefetchCompany?.(comp)}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setQuickViewTarget({
-                              kind: 'company',
-                              company: comp,
-                            });
+                            openCompanyQuickView(comp);
                           }}
                           title={`Open Sidebar QuickView for ${comp.name}`}
                           aria-label={`Open Sidebar QuickView for ${comp.name}`}
-                          className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-petrol-300/80 dark:border-petrol-700 bg-bone-100/90 dark:bg-petrol-900/90 text-petrol-800 dark:text-lemon-300 hover:bg-petrol-700 hover:text-bone-50 hover:border-petrol-700 dark:hover:bg-lemon-400 dark:hover:text-petrol-950 dark:hover:border-lemon-400 transition-colors cursor-pointer whitespace-nowrap"
+                          className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
+                            isLastQuickViewed
+                              ? 'border-purple-600 dark:border-purple-400 bg-purple-600 dark:bg-purple-500 text-white hover:bg-purple-700 dark:hover:bg-purple-400'
+                              : 'border-petrol-300/80 dark:border-petrol-700 bg-bone-100/90 dark:bg-petrol-900/90 text-petrol-800 dark:text-lemon-300 hover:bg-petrol-700 hover:text-bone-50 hover:border-petrol-700 dark:hover:bg-lemon-400 dark:hover:text-petrol-950 dark:hover:border-lemon-400'
+                          }`}
                         >
                           <Eye className="h-3.5 w-3.5 shrink-0" />
                           <span>Quick</span>

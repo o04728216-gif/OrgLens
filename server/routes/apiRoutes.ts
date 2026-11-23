@@ -567,6 +567,49 @@ apiRouter.get(
   }
 );
 
+/**
+ * Free read-only Company QuickView preview: NEVER checks, counts, or deducts coins.
+ * Coins are only counted/deducted when the user explicitly opens the Full Roster via /api/search.
+ */
+apiRouter.get(
+  '/api/quickview',
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const rawDomain = String(req.query.domain || '');
+    const companySlug = String(req.query.companySlug || '')
+      .trim()
+      .toLowerCase();
+    const domain = rawDomain ? normalizeDomain(rawDomain) : '';
+
+    if (!companySlug && (!domain || !isValidDomain(domain))) {
+      res.status(400).json({
+        error: 'Please select a valid company to preview.',
+      });
+      return;
+    }
+
+    try {
+      const data = await discoverDomainEmployees(
+        domain,
+        false,
+        companySlug || undefined
+      );
+
+      res.json({
+        ...data,
+        totalEmployeesCount: data.employees.length,
+        employees: data.employees.slice(0, 8),
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Unexpected error while loading company QuickView.';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
 apiRouter.get(
   '/api/search',
   requireAuth,

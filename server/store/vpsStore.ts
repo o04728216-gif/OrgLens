@@ -373,30 +373,33 @@ function loadDatabaseFromDisk(): VpsDatabaseSchema {
     }
   }
 
-  // Also check SQLite cross-backup mirror (`platform_auth_backup` inside worldwide-companies.sqlite)
-  try {
-    const sqliteBackup = loadPlatformAuthBackupFromSqlite();
-    if (sqliteBackup?.payloadJson) {
-      const parsed = JSON.parse(sqliteBackup.payloadJson) as VpsDatabaseSchema;
-      if (parsed && typeof parsed === 'object') {
-        const { state, migrated } = ensureRootAdminIntegrity(parsed);
-        const mtimeMs = Date.parse(sqliteBackup.updatedAt) || Date.now();
-        const score = scoreRecoveredDatabase(state, mtimeMs);
-        if (
-          bestState === null ||
-          score > bestScore ||
-          (score === bestScore && mtimeMs > bestMtime)
-        ) {
-          bestState = state;
-          bestScore = score;
-          bestMtime = mtimeMs;
-          bestPath = 'sqlite:platform_auth_backup';
-          bestMigrated = migrated;
+  // Only open SQLite cross-backup mirror (`platform_auth_backup`) synchronously if no local JSON DB survived
+  // (avoids blocking server boot on large SQLite WAL recovery during normal restarts while keeping 100% recovery safety!)
+  if (bestState === null) {
+    try {
+      const sqliteBackup = loadPlatformAuthBackupFromSqlite();
+      if (sqliteBackup?.payloadJson) {
+        const parsed = JSON.parse(sqliteBackup.payloadJson) as VpsDatabaseSchema;
+        if (parsed && typeof parsed === 'object') {
+          const { state, migrated } = ensureRootAdminIntegrity(parsed);
+          const mtimeMs = Date.parse(sqliteBackup.updatedAt) || Date.now();
+          const score = scoreRecoveredDatabase(state, mtimeMs);
+          if (
+            bestState === null ||
+            score > bestScore ||
+            (score === bestScore && mtimeMs > bestMtime)
+          ) {
+            bestState = state;
+            bestScore = score;
+            bestMtime = mtimeMs;
+            bestPath = 'sqlite:platform_auth_backup';
+            bestMigrated = migrated;
+          }
         }
       }
+    } catch {
+      // Non-fatal SQLite backup fallback
     }
-  } catch {
-    // Non-fatal SQLite backup fallback
   }
 
   if (bestState) {

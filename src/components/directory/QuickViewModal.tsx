@@ -42,9 +42,9 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
   onOpenFullCompany,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [companyPreview, setCompanyPreview] = useState<SearchResponse | null>(
-    null
-  );
+  const [companyPreview, setCompanyPreview] = useState<
+    (SearchResponse & { totalEmployeesCount?: number }) | null
+  >(null);
   const [isLoadingCompany, setIsLoadingCompany] = useState(false);
   const [companyError, setCompanyError] = useState<string | null>(null);
 
@@ -105,16 +105,17 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
     const qs = new URLSearchParams();
     if (companyDomainKey) qs.set('domain', companyDomainKey);
     if (companySlugKey) qs.set('companySlug', companySlugKey);
-    qs.set('source', 'filter');
 
-    void apiFetch(`/api/search?${qs.toString()}`)
+    void apiFetch(`/api/quickview?${qs.toString()}`)
       .then(async (res: Response) => {
         const data = await res.json();
         if (cancelled) return;
         if (!res.ok) {
           throw new Error(data?.error || 'Could not load company QuickView.');
         }
-        setCompanyPreview(data as SearchResponse);
+        setCompanyPreview(
+          data as SearchResponse & { totalEmployeesCount?: number }
+        );
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -170,9 +171,8 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
     companyPreview?.confirmedEmailsCount ?? comp.confirmedEmailCount ?? 0;
   const zoomInfo = companyPreview?.zoomInfoIntel;
   const previewEmployees = companyPreview?.employees || [];
-  const allPreviewEmails = previewEmployees
-    .map((e) => e.email)
-    .filter((e): e is string => Boolean(e && e.includes('@')));
+  const indexedRosterCount =
+    companyPreview?.totalEmployeesCount ?? previewEmployees.length;
 
   const sidebarContent = (
     <div
@@ -310,19 +310,19 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
             </div>
 
             <div className="rounded-xl px-3 py-2.5 border border-bone-300/90 dark:border-petrol-800 bg-white dark:bg-petrol-900/60">
-              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-bone-400">
-                <Mail className="h-3 w-3 text-petrol-700 dark:text-lemon-400" />
-                <span>Email Pattern</span>
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 min-w-0">
-                <span className="text-xs font-bold font-mono text-petrol-950 dark:text-bone-50 truncate">
-                  {effectivePattern}
+              <div className="flex items-center justify-between gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-bone-400">
+                <span className="inline-flex items-center gap-1.5 min-w-0">
+                  <Mail className="h-3 w-3 text-petrol-700 dark:text-lemon-400 shrink-0" />
+                  <span>Email Pattern</span>
                 </span>
                 {typeof effectivePatternConf === 'number' && (
                   <span className="text-[10px] font-mono font-bold text-emerald-700 dark:text-emerald-400 shrink-0">
                     {effectivePatternConf}%
                   </span>
                 )}
+              </div>
+              <div className="mt-1 text-xs font-bold font-mono leading-snug text-petrol-950 dark:text-bone-50 whitespace-normal break-words">
+                {effectivePattern}
               </div>
               <div className="mt-0.5 text-[10px] text-slate-500 dark:text-bone-400 truncate">
                 {effectiveMxProvider || 'DNS MX Ready'}
@@ -337,7 +337,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
               <div className="mt-1 text-xs font-bold font-mono tabular-nums text-petrol-950 dark:text-bone-50 truncate">
                 {isLoadingCompany
                   ? 'Scanning...'
-                  : `${previewEmployees.length.toLocaleString()} contacts`}
+                  : `${indexedRosterCount.toLocaleString()} contacts`}
               </div>
               <div className="mt-0.5 text-[10px] text-emerald-700 dark:text-emerald-400 font-medium truncate">
                 {confirmedCount > 0
@@ -376,36 +376,12 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
             </div>
           )}
 
-          {/* Top Leadership & Direct Emails */}
+          {/* Top Leadership Preview */}
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-bone-400">
-                Top Decision-Makers &amp; Emails
+                Top Decision-Makers Preview
               </h4>
-              {allPreviewEmails.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    void triggerCopy(
-                      'qv-all-emails',
-                      allPreviewEmails.join('\n')
-                    )
-                  }
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-petrol-700 dark:text-lemon-300 hover:underline cursor-pointer"
-                >
-                  {copiedId === 'qv-all-emails' ? (
-                    <>
-                      <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                      <span>Copied {allPreviewEmails.length}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3 w-3" />
-                      <span>Copy all ({allPreviewEmails.length})</span>
-                    </>
-                  )}
-                </button>
-              )}
             </div>
 
             {isLoadingCompany ? (
@@ -421,53 +397,40 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
               </div>
             ) : previewEmployees.length > 0 ? (
               <div className="divide-y divide-bone-200 dark:divide-petrol-800 rounded-xl border border-bone-300/90 dark:border-petrol-800 bg-white dark:bg-petrol-900/55 overflow-hidden">
-                {previewEmployees.slice(0, 8).map((emp) => {
-                  const rowCopied = copiedId === `qv-emp:${emp.id}`;
-                  return (
-                    <div
-                      key={emp.id}
-                      className="px-3 py-2.5 flex items-center justify-between gap-2 hover:bg-bone-100/70 dark:hover:bg-petrol-800/50 transition-colors"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-xs text-petrol-950 dark:text-bone-50 truncate">
-                            {emp.fullName}
-                          </span>
-                          {emp.emailVerifiedOnWeb && (
-                            <MailCheck
-                              className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0"
-                              aria-label="Verified on public web"
-                            />
-                          )}
-                        </div>
-                        <p className="text-[11px] text-slate-600 dark:text-bone-300 truncate">
-                          {emp.jobTitle}
-                        </p>
-                        {emp.email && (
-                          <p className="mt-0.5 font-mono text-[11px] text-petrol-700 dark:text-lemon-300 break-all">
-                            {emp.email}
-                          </p>
+                {previewEmployees.slice(0, 8).map((emp) => (
+                  <div
+                    key={emp.id}
+                    className="px-3 py-2.5 flex items-center justify-between gap-2 hover:bg-bone-100/70 dark:hover:bg-petrol-800/50 transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold text-xs text-petrol-950 dark:text-bone-50 truncate">
+                          {emp.fullName}
+                        </span>
+                        {emp.emailVerifiedOnWeb && (
+                          <MailCheck
+                            className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0"
+                            aria-label="Verified on public web"
+                          />
                         )}
                       </div>
-
+                      <p className="text-[11px] text-slate-600 dark:text-bone-300 truncate">
+                        {emp.jobTitle}
+                      </p>
                       {emp.email && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void triggerCopy(`qv-emp:${emp.id}`, emp.email)
-                          }
-                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold font-mono border transition-colors cursor-pointer shrink-0 ${
-                            rowCopied
-                              ? 'border-emerald-600 bg-emerald-600 text-white'
-                              : 'border-bone-300 dark:border-petrol-700 bg-bone-50 dark:bg-petrol-950 text-petrol-900 dark:text-bone-100 hover:border-petrol-600 dark:hover:border-lemon-400'
-                          }`}
-                        >
-                          {rowCopied ? 'Copied' : `${emp.emailAccuracy}%`}
-                        </button>
+                        <p className="mt-0.5 font-mono text-[11px] text-petrol-700 dark:text-lemon-300 break-all select-none">
+                          {emp.email}
+                        </p>
                       )}
                     </div>
-                  );
-                })}
+
+                    {emp.email && (
+                      <span className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold font-mono border border-bone-300 dark:border-petrol-700 bg-bone-50 dark:bg-petrol-950 text-petrol-900 dark:text-bone-100 shrink-0 select-none">
+                        {emp.emailAccuracy}%
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="p-3.5 rounded-xl border border-bone-300/90 dark:border-petrol-800 bg-white/80 dark:bg-petrol-900/40 text-xs text-slate-600 dark:text-bone-300">
@@ -494,25 +457,6 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
               )}
               <span>{copiedId === 'qv-comp-web' ? 'Copied' : 'Website'}</span>
             </button>
-
-            {allPreviewEmails.length > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  void triggerCopy('qv-footer-emails', allPreviewEmails.join('\n'))
-                }
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-bone-300 dark:border-petrol-700 bg-white dark:bg-petrol-950 text-petrol-900 dark:text-bone-100 hover:bg-bone-50 dark:hover:bg-petrol-800 cursor-pointer transition-colors"
-              >
-                {copiedId === 'qv-footer-emails' ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-500" />
-                ) : (
-                  <Mail className="h-3.5 w-3.5" />
-                )}
-                <span>
-                  {copiedId === 'qv-footer-emails' ? 'Copied' : 'Emails'}
-                </span>
-              </button>
-            )}
           </div>
 
           {onOpenFullCompany && (

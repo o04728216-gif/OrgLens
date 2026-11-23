@@ -335,9 +335,6 @@ export async function fetchGlobalIndustries(): Promise<GlobalIndustryOption[]> {
   return deriveIndustriesFromVault();
 }
 
-// Pre-warm the 276 canonical B2B industries into RAM immediately on module load
-void fetchGlobalIndustries().catch(() => {});
-
 function mapRawTheOrgCompany(
   c: Record<string, unknown>,
   fallbackIndustryTitle: string,

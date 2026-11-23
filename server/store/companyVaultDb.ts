@@ -308,6 +308,8 @@ function getDb(): DatabaseSync {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
+    PRAGMA wal_autocheckpoint = 1000;
+    PRAGMA journal_size_limit = 67108864;
     PRAGMA temp_store = MEMORY;
     PRAGMA busy_timeout = 5000;
 

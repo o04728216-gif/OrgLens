@@ -38,10 +38,9 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`OrgLens server listening on http://0.0.0.0:${PORT}`);
 });
 
-const bootstrapPromise = (async () => {
-  const { apiRouter } = await import('./server/routes/apiRoutes.ts');
-  mountedApiRouter = apiRouter;
-
+// Mount Vite / static frontend FIRST and independently so GET / and JS modules respond in < 500ms
+// without ever waiting on SQLite WAL recovery or heavy backend route imports!
+const frontendReadyPromise = (async () => {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -65,6 +64,15 @@ const bootstrapPromise = (async () => {
     });
     mountedFrontendHandler = prodRouter;
   }
+})();
+
+const apiReadyPromise = (async () => {
+  const { apiRouter } = await import('./server/routes/apiRoutes.ts');
+  mountedApiRouter = apiRouter;
+})();
+
+const bootstrapPromise = (async () => {
+  await Promise.all([frontendReadyPromise, apiReadyPromise]);
 
   const { getStoragePersistenceDiagnostics } = await import(
     './server/store/persistentDataDir.ts'
@@ -168,27 +176,27 @@ const bootstrapPromise = (async () => {
         // Non-fatal background warm-up
       }
     })();
-  }, 4000);
+  }, 6000);
 })();
+
+void bootstrapPromise;
 
 app.use(async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!mountedApiRouter || !mountedFrontendHandler) {
-      await bootstrapPromise;
+    if (req.path.startsWith('/api/')) {
+      if (!mountedApiRouter) {
+        await apiReadyPromise;
+      }
+      if (mountedApiRouter) {
+        mountedApiRouter(req, res, next);
+        return;
+      }
     }
-    if (mountedApiRouter) {
-      mountedApiRouter(req, res, (apiErr?: unknown) => {
-        if (apiErr) {
-          next(apiErr);
-          return;
-        }
-        if (res.headersSent) return;
-        if (mountedFrontendHandler) {
-          mountedFrontendHandler(req, res, next);
-        } else {
-          next();
-        }
-      });
+    if (!mountedFrontendHandler) {
+      await frontendReadyPromise;
+    }
+    if (mountedFrontendHandler) {
+      mountedFrontendHandler(req, res, next);
       return;
     }
     next();
