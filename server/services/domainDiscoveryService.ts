@@ -10,7 +10,10 @@ import {
   expandFullIndustryTitle,
   splitFullNameForExcel,
 } from '../../src/utils/emailFormulas.ts';
-import { estimateCompanyRevenueRange } from '../../src/utils/geographyAndRevenue.ts';
+import {
+  estimateCompanyRevenueRange,
+  sanitizeRevenueDisplay,
+} from '../../src/utils/geographyAndRevenue.ts';
 import { CACHE_TTL_MS, domainCache, slugToDomainCache } from '../cache.ts';
 import {
   getCompanyOfficersBySlugOrDomain,
@@ -80,6 +83,19 @@ function withSoftDeadline<T>(
     promise.catch(() => fallback),
     new Promise<T>((resolve) => setTimeout(() => resolve(fallback), timeoutMs)),
   ]);
+}
+
+function sanitizeSearchResponseRevenue(resp: SearchResponse): SearchResponse {
+  if (!resp.zoomInfoIntel?.revenue) return resp;
+  const cleaned = sanitizeRevenueDisplay(resp.zoomInfoIntel.revenue);
+  if (cleaned === resp.zoomInfoIntel.revenue) return resp;
+  return {
+    ...resp,
+    zoomInfoIntel: {
+      ...resp.zoomInfoIntel,
+      revenue: cleaned,
+    },
+  };
 }
 
 function mapEmailSourceToDiscoverySource(
@@ -167,11 +183,13 @@ export async function discoverDomainEmployees(
     if (domain) {
       const cachedEntry = domainCache.get(domain);
       if (cachedEntry && cachedEntry.expiresAt > startedAt) {
-        return applyManualOverrideToSearchResponse({
-          ...cachedEntry.data,
-          cached: true,
-          durationMs: Date.now() - startedAt,
-        });
+        return sanitizeSearchResponseRevenue(
+          applyManualOverrideToSearchResponse({
+            ...cachedEntry.data,
+            cached: true,
+            durationMs: Date.now() - startedAt,
+          })
+        );
       }
     }
 
@@ -211,11 +229,13 @@ export async function discoverDomainEmployees(
           expiresAt: Date.now() + CACHE_TTL_MS,
         });
       }
-      return applyManualOverrideToSearchResponse({
-        ...sqliteCached,
-        cached: true,
-        durationMs: Date.now() - startedAt,
-      });
+      return sanitizeSearchResponseRevenue(
+        applyManualOverrideToSearchResponse({
+          ...sqliteCached,
+          cached: true,
+          durationMs: Date.now() - startedAt,
+        })
+      );
     }
   }
 
@@ -225,10 +245,12 @@ export async function discoverDomainEmployees(
   const existingInFlight = inFlightLookups.get(dedupeKey);
   if (existingInFlight) {
     const shared = await existingInFlight;
-    return applyManualOverrideToSearchResponse({
-      ...shared,
-      durationMs: Date.now() - startedAt,
-    });
+    return sanitizeSearchResponseRevenue(
+      applyManualOverrideToSearchResponse({
+        ...shared,
+        durationMs: Date.now() - startedAt,
+      })
+    );
   }
 
   const executionPromise = (async (): Promise<SearchResponse> => {
@@ -899,7 +921,9 @@ export async function discoverDomainEmployees(
   inFlightLookups.set(dedupeKey, executionPromise);
   try {
     const finalRes = await executionPromise;
-    return applyManualOverrideToSearchResponse(finalRes);
+    return sanitizeSearchResponseRevenue(
+      applyManualOverrideToSearchResponse(finalRes)
+    );
   } finally {
     inFlightLookups.delete(dedupeKey);
   }

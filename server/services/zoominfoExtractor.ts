@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { ZoomInfoCompanyIntel } from '../../src/types.ts';
+import { sanitizeRevenueDisplay } from '../../src/utils/geographyAndRevenue.ts';
 import type { CandidateEmployee, RawSearchHit } from '../types.ts';
 import {
   cleanJobTitle,
@@ -137,13 +138,16 @@ function parseZoomInfoCompanyHits(
 
   const revMatch =
     mergedText.match(
-      /(?:revenue(?:\s+is|\s+of|\s*:)?\s*)(<?\$\s*\d+(?:\.\d+)?\s*(?:billion|million|b|m|k)\+?)/i
+      /(?:revenue(?:\s+is|\s+of|\s*:)?\s*)((?:under\s+|<\s*)?[\$€£]\s*\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)(?:\+|(?=\b|[^a-zA-Z]|$))(?:\s*[-–—]\s*[\$€£]?\s*\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)(?:\+|(?=\b|[^a-zA-Z]|$)))?)/i
     ) ||
     mergedText.match(
-      /(<?\$\s*\d+(?:\.\d+)?\s*(?:billion|million)\+?)(?:\s+in\s+revenue|\s+revenue)/i
+      /((?:under\s+|<\s*)?[\$€£]\s*\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|bn|mn)(?:\+|(?=\b|[^a-zA-Z]|$)))(?:\s+in\s+revenue|\s+revenue)/i
     );
   if (revMatch?.[1]) {
-    intel.revenue = cleanWhitespace(revMatch[1]).replace(/\$\s+/, '$');
+    const cleanRev = sanitizeRevenueDisplay(revMatch[1]);
+    if (cleanRev) {
+      intel.revenue = cleanRev;
+    }
   }
 
   const empMatch =
@@ -327,13 +331,53 @@ function extractNamesFromZoomInfoDirectorySnippets(
   return out;
 }
 
+function formatWikiCurrencyTemplate(
+  symbol: string,
+  paramsRaw: string
+): string {
+  const positional = paramsRaw
+    .split('|')
+    .map((p) => p.trim())
+    .filter((p) => p && !p.includes('='));
+  if (positional.length === 0) return '';
+  return `${symbol}${positional.slice(0, 2).join(' ')}`;
+}
+
 function stripWikiMarkup(raw: string): string {
   return cleanWhitespace(
     raw
       .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
       .replace(/<ref[^>]*\/>/gi, '')
+      .replace(/&nbsp;|&#160;|&#xA0;|\u00A0/gi, ' ')
+      .replace(/&ndash;|&mdash;/gi, '-')
+      .replace(/&amp;/gi, '&')
+      .replace(/\{\{(?:nbsp|spaces)[^}]*\}\}/gi, ' ')
       .replace(/\{\{(?:increase|decrease|steady|gain|loss|profit|up|down)[^}]*\}\}/gi, '')
-      .replace(/\{\{(?:US\$|USD|\$)\|([^|}]+)[^}]*\}\}/gi, '$$$1')
+      .replace(/\{\{(?:nowrap|nobreak|circa|small)\s*\|([^}]+)\}\}/gi, '$1')
+      .replace(/\{\{(?:US\$|USD|\$|CA\$|CAD|AU\$|AUD)\|([^}]+)\}\}/gi, (_, p: string) =>
+        formatWikiCurrencyTemplate('$', p)
+      )
+      .replace(/\{\{(?:EUR|Euro|€)\|([^}]+)\}\}/gi, (_, p: string) =>
+        formatWikiCurrencyTemplate('€', p)
+      )
+      .replace(/\{\{(?:GBP|£)\|([^}]+)\}\}/gi, (_, p: string) =>
+        formatWikiCurrencyTemplate('£', p)
+      )
+      .replace(
+        /\{\{currency\|([^|}]+)\|([^|}]+)[^}]*\}\}/gi,
+        (_, amount: string, code: string) => {
+          const c = code.trim().toUpperCase();
+          const sym =
+            c === 'EUR' || c === 'EURO'
+              ? '€'
+              : c === 'GBP'
+              ? '£'
+              : c === 'USD' || c === 'US$' || c === 'US' || c === 'CAD' || c === 'AUD'
+              ? '$'
+              : '';
+          return sym ? `${sym}${amount.trim()}` : amount.trim();
+        }
+      )
       .replace(/\{\{(?:ubl|unbulleted list|plainlist|hlist|flatlist)\s*\|/gi, ' ')
       .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
       .replace(/\[\[([^\]]+)\]\]/g, '$1')
@@ -443,13 +487,19 @@ async function fetchWikipediaCompanyFirmographics(
 
     const rawRev = getField(['revenue']);
     const revMatch = rawRev.match(
-      /(?:US|CA|EU|GB)?\s*[\$€£]\s*\d+(?:\.\d+)?\s*(?:trillion|billion|million|B|M)?/i
+      /(?:US|USD|CA|CAD|AU|AUD|EU|EUR|GB|GBP)?\s*[\$€£]\s*\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)(?:\+|(?=\b|[^a-zA-Z]|$))/i
     );
     if (revMatch?.[0]) {
-      intel.revenue = cleanWhitespace(revMatch[0]).replace(/^US\s*/, '');
+      const cleanRev = sanitizeRevenueDisplay(revMatch[0]);
+      if (cleanRev) {
+        intel.revenue = cleanRev;
+      }
     }
 
-    const rawEmp = getField(['num_employees', 'employees']);
+    const rawEmp = getField(['num_employees', 'employees']).replace(
+      /\b(?:as\s+of\s+|in\s+|fy\s*)?(?:19|20)\d{2}\b/gi,
+      ''
+    );
     const empMatch = rawEmp.match(/(\d{1,3}(?:,\d{3})+|\d{2,6}\+?)/);
     if (empMatch?.[1]) {
       intel.headcount = `${empMatch[1]} employees`;
