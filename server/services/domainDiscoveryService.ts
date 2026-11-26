@@ -10,10 +10,7 @@ import {
   expandFullIndustryTitle,
   splitFullNameForExcel,
 } from '../../src/utils/emailFormulas.ts';
-import {
-  estimateCompanyRevenueRange,
-  sanitizeRevenueDisplay,
-} from '../../src/utils/geographyAndRevenue.ts';
+import { estimateCompanyRevenueRange } from '../../src/utils/geographyAndRevenue.ts';
 import { CACHE_TTL_MS, domainCache, slugToDomainCache } from '../cache.ts';
 import {
   getCompanyOfficersBySlugOrDomain,
@@ -70,7 +67,23 @@ import {
 import { inspectTargetWebsite } from './websiteScraper.ts';
 import { fetchClearbitCompanySuggestions } from './worldwideRegistryConnectors.ts';
 import { markUserApiActivity } from './worldwideCrawlerDaemon.ts';
-import { extractZoomInfoIntel } from './zoominfoExtractor.ts';
+import {
+  extractZoomInfoIntel,
+  normalizeExtractedRevenue,
+} from './zoominfoExtractor.ts';
+
+function sanitizeCachedSearchResponse(res: SearchResponse): SearchResponse {
+  if (!res.zoomInfoIntel?.revenue) return res;
+  const cleaned = normalizeExtractedRevenue(res.zoomInfoIntel.revenue);
+  if (cleaned === res.zoomInfoIntel.revenue) return res;
+  return {
+    ...res,
+    zoomInfoIntel: {
+      ...res.zoomInfoIntel,
+      revenue: cleaned || undefined,
+    },
+  };
+}
 
 const inFlightLookups = new Map<string, Promise<SearchResponse>>();
 
@@ -83,19 +96,6 @@ function withSoftDeadline<T>(
     promise.catch(() => fallback),
     new Promise<T>((resolve) => setTimeout(() => resolve(fallback), timeoutMs)),
   ]);
-}
-
-function sanitizeSearchResponseRevenue(resp: SearchResponse): SearchResponse {
-  if (!resp.zoomInfoIntel?.revenue) return resp;
-  const cleaned = sanitizeRevenueDisplay(resp.zoomInfoIntel.revenue);
-  if (cleaned === resp.zoomInfoIntel.revenue) return resp;
-  return {
-    ...resp,
-    zoomInfoIntel: {
-      ...resp.zoomInfoIntel,
-      revenue: cleaned,
-    },
-  };
 }
 
 function mapEmailSourceToDiscoverySource(
@@ -183,8 +183,8 @@ export async function discoverDomainEmployees(
     if (domain) {
       const cachedEntry = domainCache.get(domain);
       if (cachedEntry && cachedEntry.expiresAt > startedAt) {
-        return sanitizeSearchResponseRevenue(
-          applyManualOverrideToSearchResponse({
+        return applyManualOverrideToSearchResponse(
+          sanitizeCachedSearchResponse({
             ...cachedEntry.data,
             cached: true,
             durationMs: Date.now() - startedAt,
@@ -223,19 +223,18 @@ export async function discoverDomainEmployees(
       !isSparseStaleCache &&
       !isMismatchedLegacyCache
     ) {
-      if (sqliteCached.domain) {
-        domainCache.set(sqliteCached.domain, {
-          data: sqliteCached,
+      const sanitizedCached = sanitizeCachedSearchResponse(sqliteCached);
+      if (sanitizedCached.domain) {
+        domainCache.set(sanitizedCached.domain, {
+          data: sanitizedCached,
           expiresAt: Date.now() + CACHE_TTL_MS,
         });
       }
-      return sanitizeSearchResponseRevenue(
-        applyManualOverrideToSearchResponse({
-          ...sqliteCached,
-          cached: true,
-          durationMs: Date.now() - startedAt,
-        })
-      );
+      return applyManualOverrideToSearchResponse({
+        ...sanitizedCached,
+        cached: true,
+        durationMs: Date.now() - startedAt,
+      });
     }
   }
 
@@ -245,12 +244,10 @@ export async function discoverDomainEmployees(
   const existingInFlight = inFlightLookups.get(dedupeKey);
   if (existingInFlight) {
     const shared = await existingInFlight;
-    return sanitizeSearchResponseRevenue(
-      applyManualOverrideToSearchResponse({
-        ...shared,
-        durationMs: Date.now() - startedAt,
-      })
-    );
+    return applyManualOverrideToSearchResponse({
+      ...shared,
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   const executionPromise = (async (): Promise<SearchResponse> => {
@@ -921,9 +918,7 @@ export async function discoverDomainEmployees(
   inFlightLookups.set(dedupeKey, executionPromise);
   try {
     const finalRes = await executionPromise;
-    return sanitizeSearchResponseRevenue(
-      applyManualOverrideToSearchResponse(finalRes)
-    );
+    return applyManualOverrideToSearchResponse(finalRes);
   } finally {
     inFlightLookups.delete(dedupeKey);
   }

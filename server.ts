@@ -188,9 +188,23 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
         await apiReadyPromise;
       }
       if (mountedApiRouter) {
-        mountedApiRouter(req, res, next);
+        mountedApiRouter(req, res, (routeErr?: unknown) => {
+          if (routeErr) {
+            next(routeErr);
+            return;
+          }
+          if (!res.headersSent) {
+            res.status(404).json({
+              error: `API endpoint not found: ${req.method} ${req.path}`,
+            });
+          }
+        });
         return;
       }
+      res.status(503).json({
+        error: 'API service is still starting up. Please retry in a moment.',
+      });
+      return;
     }
     if (!mountedFrontendHandler) {
       await frontendReadyPromise;
@@ -204,3 +218,36 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
     next(err);
   }
 });
+
+// Express JSON error handler: guarantees /api/* NEVER returns HTML ("<!DOCTYPE html>...")
+app.use(
+  (
+    err: unknown,
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    if (req.path.startsWith('/api/')) {
+      const status =
+        typeof (err as { status?: number; statusCode?: number })?.status ===
+        'number'
+          ? (err as { status: number }).status
+          : typeof (err as { statusCode?: number })?.statusCode === 'number'
+          ? (err as { statusCode: number }).statusCode
+          : 500;
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Unexpected server error while processing API request.';
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: message,
+      });
+      return;
+    }
+    next(err);
+  }
+);

@@ -1,6 +1,5 @@
 import axios from 'axios';
 import type { ZoomInfoCompanyIntel } from '../../src/types.ts';
-import { sanitizeRevenueDisplay } from '../../src/utils/geographyAndRevenue.ts';
 import type { CandidateEmployee, RawSearchHit } from '../types.ts';
 import {
   cleanJobTitle,
@@ -136,18 +135,21 @@ function parseZoomInfoCompanyHits(
     )
     .join(' | ');
 
-  const revMatch =
+  const revRangeMatch = mergedText.match(
+    /(?:revenue(?:\s+is|\s+of|\s*:)?\s*)(<?\s*(?:US|CA|EU|GB|UK)?\s*[\$€£]\s*\d[\d,]*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|bn|mn|[TBMK])\s*(?:-|–|—|to)\s*(?:US|CA|EU|GB|UK)?\s*[\$€£]?\s*\d[\d,]*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|bn|mn|[TBMK])\b\+?)/i
+  );
+  const revSingleMatch =
     mergedText.match(
-      /(?:revenue(?:\s+is|\s+of|\s*:)?\s*)((?:under\s+|<\s*)?[\$€£]\s*\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)(?:\+|(?=\b|[^a-zA-Z]|$))(?:\s*[-–—]\s*[\$€£]?\s*\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)(?:\+|(?=\b|[^a-zA-Z]|$)))?)/i
+      /(?:revenue(?:\s+is|\s+of|\s*:)?\s*)(<?\s*(?:US|CA|EU|GB|UK)?\s*[\$€£]\s*\d[\d,]*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|bn|mn|[TBMK])\b\+?)/i
     ) ||
     mergedText.match(
-      /((?:under\s+|<\s*)?[\$€£]\s*\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|bn|mn)(?:\+|(?=\b|[^a-zA-Z]|$)))(?:\s+in\s+revenue|\s+revenue)/i
+      /(<?\s*(?:US|CA|EU|GB|UK)?\s*[\$€£]\s*\d[\d,]*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|bn|mn)\b\+?)(?:\s+in\s+revenue|\s+annual\s+revenue|\s+revenue)/i
     );
-  if (revMatch?.[1]) {
-    const cleanRev = sanitizeRevenueDisplay(revMatch[1]);
-    if (cleanRev) {
-      intel.revenue = cleanRev;
-    }
+  const cleanedZoomRev = normalizeExtractedRevenue(
+    revRangeMatch?.[1] || revSingleMatch?.[1] || ''
+  );
+  if (cleanedZoomRev) {
+    intel.revenue = cleanedZoomRev;
   }
 
   const empMatch =
@@ -331,16 +333,112 @@ function extractNamesFromZoomInfoDirectorySnippets(
   return out;
 }
 
-function formatWikiCurrencyTemplate(
-  symbol: string,
-  paramsRaw: string
-): string {
-  const positional = paramsRaw
-    .split('|')
-    .map((p) => p.trim())
-    .filter((p) => p && !p.includes('='));
-  if (positional.length === 0) return '';
-  return `${symbol}${positional.slice(0, 2).join(' ')}`;
+function formatCompactRevenueNumber(num: number): string {
+  if (!Number.isFinite(num) || num <= 0) return '';
+  if (num >= 100) return String(Math.round(num * 10) / 10).replace(/\.0$/, '');
+  return String(Math.round(num * 100) / 100).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+}
+
+function normalizeSingleRevenueToken(raw: string): string | null {
+  const cleaned = cleanWhitespace(raw)
+    .replace(/^(?:US|CA|EU|GB|UK)\s*(?=[\$€£])/i, '')
+    .trim();
+  if (!cleaned) return null;
+
+  // Reject strings containing multiple currency symbols or trailing garbage commas
+  const currencyMatches = cleaned.match(/[\$€£]/g) || [];
+  if (currencyMatches.length !== 1) return null;
+  if (/[,;]\s*$/.test(cleaned)) return null;
+
+  // Match explicit currency + amount + mandatory magnitude unit (K/M/B/T/Thousand/Million/Billion/Trillion)
+  const unitMatch = cleaned.match(
+    /^(<\s*)?([\$€£])\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,3}))?\s*(trillion|billion|million|thousand|bn|mn|T|B|M|K)\b(\+)?$/i
+  );
+  if (unitMatch) {
+    const isLessThan = Boolean(unitMatch[1]);
+    const symbol = unitMatch[2];
+    const intPart = unitMatch[3].replace(/,/g, '');
+    const decPart = unitMatch[4] ? `.${unitMatch[4]}` : '';
+    let value = Number.parseFloat(`${intPart}${decPart}`);
+    const rawUnit = unitMatch[5].toLowerCase();
+    const hasPlus = Boolean(unitMatch[6]);
+
+    let unit: 'K' | 'M' | 'B' | 'T' = 'M';
+    if (rawUnit === 't' || rawUnit === 'trillion') unit = 'T';
+    else if (rawUnit === 'b' || rawUnit === 'bn' || rawUnit === 'billion') unit = 'B';
+    else if (rawUnit === 'm' || rawUnit === 'mn' || rawUnit === 'million') unit = 'M';
+    else if (rawUnit === 'k' || rawUnit === 'thousand') unit = 'K';
+
+    if (!Number.isFinite(value) || value <= 0) return null;
+
+    // Normalize overflow units (e.g. "$2,168 million" -> "$2.17B")
+    if (unit === 'K' && value >= 1000) {
+      value /= 1000;
+      unit = 'M';
+    }
+    if (unit === 'M' && value >= 1000) {
+      value /= 1000;
+      unit = 'B';
+    }
+    if (unit === 'B' && value >= 1000) {
+      value /= 1000;
+      unit = 'T';
+    }
+
+    // Plausibility guard (no company has > $50T revenue)
+    if (unit === 'T' && value > 50) return null;
+
+    const numStr = formatCompactRevenueNumber(value);
+    if (!numStr) return null;
+    return `${isLessThan ? '< ' : ''}${symbol}${numStr}${unit}${hasPlus ? '+' : ''}`;
+  }
+
+  // Also allow full 7+ digit comma-grouped amounts like "$450,000,000" -> "$450M"
+  const fullIntMatch = cleaned.match(/^([\$€£])\s*(\d{1,3}(?:,\d{3}){2,})$/);
+  if (fullIntMatch) {
+    const symbol = fullIntMatch[1];
+    const value = Number.parseFloat(fullIntMatch[2].replace(/,/g, ''));
+    if (!Number.isFinite(value) || value < 1_000_000 || value > 50_000_000_000_000) {
+      return null;
+    }
+    if (value >= 1_000_000_000_000) {
+      return `${symbol}${formatCompactRevenueNumber(value / 1_000_000_000_000)}T`;
+    }
+    if (value >= 1_000_000_000) {
+      return `${symbol}${formatCompactRevenueNumber(value / 1_000_000_000)}B`;
+    }
+    return `${symbol}${formatCompactRevenueNumber(value / 1_000_000)}M`;
+  }
+
+  return null;
+}
+
+/**
+ * Validates and formats an extracted revenue string (from ZoomInfo or Wikipedia)
+ * into clean compact notation (e.g. "$138.2B", "€36.8B", "$10M - $50M", "< $5M").
+ * Rejects malformed or unitless currency fragments like "$2.168", "€36.8", or "$2.168,€36.8,".
+ */
+export function normalizeExtractedRevenue(raw?: string | null): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const cleaned = cleanWhitespace(raw).trim();
+  if (!cleaned || cleaned.length > 48) return null;
+
+  // Support clean two-sided revenue ranges like "$10M - $50M"
+  const rangeParts = cleaned.split(/\s*(?:-|–|—|\bto\b)\s*/i);
+  if (rangeParts.length === 2) {
+    const left = normalizeSingleRevenueToken(rangeParts[0]);
+    const leftCurrency = left?.match(/[\$€£]/)?.[0] || '$';
+    const rightRaw = /^[\$€£]/.test(rangeParts[1].trim())
+      ? rangeParts[1]
+      : `${leftCurrency}${rangeParts[1]}`;
+    const right = normalizeSingleRevenueToken(rightRaw);
+    if (left && right) {
+      return `${left} - ${right}`;
+    }
+    return null;
+  }
+
+  return normalizeSingleRevenueToken(cleaned);
 }
 
 function stripWikiMarkup(raw: string): string {
@@ -348,36 +446,50 @@ function stripWikiMarkup(raw: string): string {
     raw
       .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
       .replace(/<ref[^>]*\/>/gi, '')
-      .replace(/&nbsp;|&#160;|&#xA0;|\u00A0/gi, ' ')
-      .replace(/&ndash;|&mdash;/gi, '-')
-      .replace(/&amp;/gi, '&')
-      .replace(/\{\{(?:nbsp|spaces)[^}]*\}\}/gi, ' ')
-      .replace(/\{\{(?:increase|decrease|steady|gain|loss|profit|up|down)[^}]*\}\}/gi, '')
-      .replace(/\{\{(?:nowrap|nobreak|circa|small)\s*\|([^}]+)\}\}/gi, '$1')
-      .replace(/\{\{(?:US\$|USD|\$|CA\$|CAD|AU\$|AUD)\|([^}]+)\}\}/gi, (_, p: string) =>
-        formatWikiCurrencyTemplate('$', p)
-      )
-      .replace(/\{\{(?:EUR|Euro|€)\|([^}]+)\}\}/gi, (_, p: string) =>
-        formatWikiCurrencyTemplate('€', p)
-      )
-      .replace(/\{\{(?:GBP|£)\|([^}]+)\}\}/gi, (_, p: string) =>
-        formatWikiCurrencyTemplate('£', p)
+      .replace(/&nbsp;|&#160;|&thinsp;|&#8201;/gi, ' ')
+      .replace(/&euro;|&#8364;/gi, '€')
+      .replace(/&pound;|&#163;/gi, '£')
+      .replace(/&ndash;|&#8211;|&mdash;|&#8212;/gi, '-')
+      .replace(/\{\{(?:nbsp|spaces)\}\}/gi, ' ')
+      .replace(
+        /\{\{(?:increase|decrease|steady|gain|loss|profit|up|down)[^}]*\}\}/gi,
+        ' '
       )
       .replace(
-        /\{\{currency\|([^|}]+)\|([^|}]+)[^}]*\}\}/gi,
-        (_, amount: string, code: string) => {
-          const c = code.trim().toUpperCase();
-          const sym =
-            c === 'EUR' || c === 'EURO'
-              ? '€'
-              : c === 'GBP'
-              ? '£'
-              : c === 'USD' || c === 'US$' || c === 'US' || c === 'CAD' || c === 'AUD'
-              ? '$'
-              : '';
-          return sym ? `${sym}${amount.trim()}` : amount.trim();
+        /\{\{(?:US\$|USD|\$)\|([^|}]+)(?:\|([^|}]+))?[^}]*\}\}/gi,
+        (_m, amt: string, unit?: string) =>
+          `$${amt}${
+            unit && /^(?:thousand|million|billion|trillion|bn|mn|[KMBT])$/i.test(unit.trim())
+              ? ` ${unit.trim()}`
+              : ''
+          }`
+      )
+      .replace(
+        /\{\{(?:EUR|Euro|€)\|([^|}]+)(?:\|([^|}]+))?[^}]*\}\}/gi,
+        (_m, amt: string, unit?: string) =>
+          `€${amt}${
+            unit && /^(?:thousand|million|billion|trillion|bn|mn|[KMBT])$/i.test(unit.trim())
+              ? ` ${unit.trim()}`
+              : ''
+          }`
+      )
+      .replace(
+        /\{\{(?:GBP|£)\|([^|}]+)(?:\|([^|}]+))?[^}]*\}\}/gi,
+        (_m, amt: string, unit?: string) =>
+          `£${amt}${
+            unit && /^(?:thousand|million|billion|trillion|bn|mn|[KMBT])$/i.test(unit.trim())
+              ? ` ${unit.trim()}`
+              : ''
+          }`
+      )
+      .replace(
+        /\{\{currency\|([^|}]+)\|(USD|US\$|EUR|GBP)[^}]*\}\}/gi,
+        (_m, amt: string, cur: string) => {
+          const sym = /^EUR$/i.test(cur) ? '€' : /^GBP$/i.test(cur) ? '£' : '$';
+          return `${sym}${amt}`;
         }
       )
+      .replace(/\{\{nowrap\|([^{}]+)\}\}/gi, '$1')
       .replace(/\{\{(?:ubl|unbulleted list|plainlist|hlist|flatlist)\s*\|/gi, ' ')
       .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
       .replace(/\[\[([^\]]+)\]\]/g, '$1')
@@ -486,20 +598,19 @@ async function fetchWikipediaCompanyFirmographics(
     const intel: ZoomInfoCompanyIntel = {};
 
     const rawRev = getField(['revenue']);
-    const revMatch = rawRev.match(
-      /(?:US|USD|CA|CAD|AU|AUD|EU|EUR|GB|GBP)?\s*[\$€£]\s*\d{1,4}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|tn|bn|mn|t|b|m|k)(?:\+|(?=\b|[^a-zA-Z]|$))/i
-    );
-    if (revMatch?.[0]) {
-      const cleanRev = sanitizeRevenueDisplay(revMatch[0]);
-      if (cleanRev) {
-        intel.revenue = cleanRev;
-      }
+    const revMatch =
+      rawRev.match(
+        /(?:US|CA|EU|GB|UK)?\s*[\$€£]\s*\d{1,3}(?:,\d{3})*(?:\.\d{1,3})?\s*(?:trillion|billion|million|thousand|bn|mn|T|B|M|K)\b\+?/i
+      ) ||
+      rawRev.match(
+        /(?:US|CA|EU|GB|UK)?\s*[\$€£]\s*\d{1,3}(?:,\d{3}){2,}\b/i
+      );
+    const cleanedWikiRev = normalizeExtractedRevenue(revMatch?.[0] || '');
+    if (cleanedWikiRev) {
+      intel.revenue = cleanedWikiRev;
     }
 
-    const rawEmp = getField(['num_employees', 'employees']).replace(
-      /\b(?:as\s+of\s+|in\s+|fy\s*)?(?:19|20)\d{2}\b/gi,
-      ''
-    );
+    const rawEmp = getField(['num_employees', 'employees']);
     const empMatch = rawEmp.match(/(\d{1,3}(?:,\d{3})+|\d{2,6}\+?)/);
     if (empMatch?.[1]) {
       intel.headcount = `${empMatch[1]} employees`;

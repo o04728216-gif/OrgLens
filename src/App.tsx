@@ -53,7 +53,7 @@ import { usePWAInstall } from './hooks/usePWAInstall';
 import { useOfflineSyncQueue } from './hooks/useOfflineSyncQueue';
 import { useUrlRouterSync } from './hooks/useUrlRouterSync';
 import { usePlatformAuth } from './hooks/usePlatformAuth';
-import { apiFetch } from './utils/authClient';
+import { apiFetch, safeReadJson } from './utils/authClient';
 import { scrollToListTop } from './utils/scrollUtils';
 import { parseUrlToAppState, type UrlRoutedState } from './utils/urlRouter';
 import {
@@ -1301,7 +1301,13 @@ export default function App() {
         if (forceRefresh) queryParams.set('refresh', 'true');
 
         const res = await apiFetch(`/api/search?${queryParams.toString()}`);
-        const payload = await res.json();
+        const payload = await safeReadJson<
+          SearchResponse & {
+            error?: string;
+            code?: string;
+            balanceRemaining?: number;
+          }
+        >(res, 'Failed to query public directory. Please try again.');
 
         if (res.status === 402 || payload?.code === 'INSUFFICIENT_COINS') {
           if (typeof payload?.balanceRemaining === 'number') {
@@ -1447,7 +1453,13 @@ export default function App() {
         const res = await apiFetch(`/api/search?${queryParams.toString()}`, {
           signal: controller.signal,
         });
-        const payload = await res.json();
+        const payload = await safeReadJson<
+          SearchResponse & {
+            error?: string;
+            code?: string;
+            balanceRemaining?: number;
+          }
+        >(res, 'Failed to load company contacts. Please try again.');
 
         if (res.status === 402 || payload?.code === 'INSUFFICIENT_COINS') {
           if (typeof payload?.balanceRemaining === 'number') {

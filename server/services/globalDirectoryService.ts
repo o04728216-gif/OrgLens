@@ -975,6 +975,7 @@ export async function resolveFilteredGlobalCompanies(
   //    Falls back cleanly to indexed SQLite queryVaultCompanies for free-text queries.
   let vaultCompaniesPool: GlobalCompanyItem[] | null = null;
   if (!hasFreeText) {
+    await ensureColumnarFacetIndexReady(allInds);
     const columnarHit = queryColumnarCompanyRowIds(
       p,
       allInds,

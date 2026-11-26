@@ -83,6 +83,53 @@ export function saveAuthToken(token: string): void {
   }
 }
 
+function isHtmlGatewayResponse(response: Response): boolean {
+  const ct = (response.headers.get('content-type') || '').toLowerCase();
+  if (ct.includes('text/html')) return true;
+  return (
+    response.status === 502 ||
+    response.status === 503 ||
+    response.status === 504
+  );
+}
+
+/**
+ * Safely parses a JSON response from `/api/*`. If the server or reverse proxy
+ * transiently returns an HTML page (e.g. `<!DOCTYPE html>...` from a 502/504 gateway
+ * or restart), throws a clean user-facing error instead of
+ * `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`.
+ */
+export async function safeReadJson<T = Record<string, unknown>>(
+  response: Response,
+  fallbackError = 'The server returned an unexpected response. Please try again.'
+): Promise<T> {
+  const rawText = await response.text();
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    if (!response.ok) {
+      throw new Error(fallbackError);
+    }
+    return {} as T;
+  }
+  if (trimmed.startsWith('<')) {
+    if (
+      response.status === 502 ||
+      response.status === 503 ||
+      response.status === 504
+    ) {
+      throw new Error(
+        'The server is temporarily busy or restarting. Please try again in a few seconds.'
+      );
+    }
+    throw new Error(fallbackError);
+  }
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    throw new Error(fallbackError);
+  }
+}
+
 export async function apiFetch(
   input: string,
   init: RequestInit = {}
@@ -97,10 +144,40 @@ export async function apiFetch(
   if (deviceId && !headers.has('X-OrgLens-Device-Id')) {
     headers.set('X-OrgLens-Device-Id', deviceId);
   }
-  const response = await fetch(input, {
+
+  const method = (init.method || 'GET').toUpperCase();
+  let response = await fetch(input, {
     ...init,
     headers,
   });
+
+  // Auto-recover transparently once if an idempotent GET hits a transient 502/503/504 or HTML proxy page
+  if (
+    method === 'GET' &&
+    input.startsWith('/api/') &&
+    isHtmlGatewayResponse(response) &&
+    !init.signal?.aborted
+  ) {
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, 900);
+      if (init.signal) {
+        init.signal.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(t);
+            resolve();
+          },
+          { once: true }
+        );
+      }
+    });
+    if (!init.signal?.aborted) {
+      response = await fetch(input, {
+        ...init,
+        headers,
+      });
+    }
+  }
 
   if (
     response.status === 401 &&
@@ -110,10 +187,10 @@ export async function apiFetch(
   ) {
     try {
       const cloned = response.clone();
-      const body = (await cloned.json()) as {
+      const body = await safeReadJson<{
         error?: string;
         code?: string;
-      };
+      }>(cloned);
       window.dispatchEvent(
         new CustomEvent<SessionInvalidatedDetail>(SESSION_INVALIDATED_EVENT, {
           detail: {

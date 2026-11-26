@@ -11,6 +11,7 @@ import {
   apiFetch,
   AUTH_TOKEN_KEY,
   loadAuthToken,
+  safeReadJson,
   saveAuthToken,
   SESSION_INVALIDATED_EVENT,
   type SessionInvalidatedDetail,
@@ -57,12 +58,12 @@ export function usePlatformAuth(isAdminRoute: boolean) {
 
   const fetchPublicConfig = useCallback(async (adminCtx = false) => {
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/public/config${adminCtx ? '?adminContext=true' : ''}`,
         { credentials: 'same-origin' }
       );
       if (res.ok) {
-        const cfg = (await res.json()) as PublicPlatformConfig;
+        const cfg = await safeReadJson<PublicPlatformConfig>(res);
         setPublicConfig(cfg);
       }
     } catch {
@@ -86,7 +87,12 @@ export function usePlatformAuth(isAdminRoute: boolean) {
         }
         return null;
       }
-      const payload = await res.json();
+      const payload = await safeReadJson<{
+        user?: UserAccountPublic;
+        ledger?: CoinLedgerEntry[];
+        orders?: UsdtPaymentOrder[];
+        config?: PublicPlatformConfig;
+      }>(res);
       if (payload?.user) {
         setUser(payload.user);
       }
@@ -158,7 +164,7 @@ export function usePlatformAuth(isAdminRoute: boolean) {
       try {
         const res = await apiFetch('/api/auth/session-check');
         if (res.ok && !cancelled) {
-          const data = (await res.json()) as { user?: UserAccountPublic };
+          const data = await safeReadJson<{ user?: UserAccountPublic }>(res);
           if (data?.user) {
             setUser(data.user);
           }
@@ -201,7 +207,13 @@ export function usePlatformAuth(isAdminRoute: boolean) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, password, device }),
       });
-      const payload = await res.json();
+      const payload = await safeReadJson<{
+        token: string;
+        user: UserAccountPublic;
+        ledger?: CoinLedgerEntry[];
+        orders?: UsdtPaymentOrder[];
+        error?: string;
+      }>(res, 'Unable to sign in. Please try again.');
       if (!res.ok) {
         throw new Error(payload?.error || 'Unable to sign in.');
       }
@@ -229,7 +241,13 @@ export function usePlatformAuth(isAdminRoute: boolean) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...input, device }),
       });
-      const payload = await res.json();
+      const payload = await safeReadJson<{
+        token: string;
+        user: UserAccountPublic;
+        ledger?: CoinLedgerEntry[];
+        orders?: UsdtPaymentOrder[];
+        error?: string;
+      }>(res, 'Unable to create account. Please try again.');
       if (!res.ok) {
         throw new Error(payload?.error || 'Unable to create account.');
       }
@@ -287,7 +305,10 @@ export function usePlatformAuth(isAdminRoute: boolean) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       });
-      const payload = await res.json();
+      const payload = await safeReadJson<{
+        user?: UserAccountPublic;
+        error?: string;
+      }>(res, 'Unable to update profile. Please try again.');
       if (!res.ok) {
         throw new Error(payload?.error || 'Unable to update profile.');
       }
@@ -310,7 +331,12 @@ export function usePlatformAuth(isAdminRoute: boolean) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...input, device }),
       });
-      const payload = await res.json();
+      const payload = await safeReadJson<{
+        token?: string;
+        user?: UserAccountPublic;
+        message?: string;
+        error?: string;
+      }>(res, 'Unable to update password. Please try again.');
       if (!res.ok) {
         throw new Error(payload?.error || 'Unable to update password.');
       }
@@ -332,7 +358,12 @@ export function usePlatformAuth(isAdminRoute: boolean) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device }),
     });
-    const payload = await res.json();
+    const payload = await safeReadJson<{
+      token?: string;
+      user?: UserAccountPublic;
+      message?: string;
+      error?: string;
+    }>(res, 'Unable to rotate session. Please try again.');
     if (!res.ok) {
       throw new Error(payload?.error || 'Unable to rotate session.');
     }
@@ -374,7 +405,15 @@ export function usePlatformAuth(isAdminRoute: boolean) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       });
-      const payload = await res.json();
+      const payload = await safeReadJson<{
+        order: UsdtPaymentOrder;
+        user: UserAccountPublic;
+        autoActivated: boolean;
+        verificationDetails: string;
+        ledger?: CoinLedgerEntry[];
+        orders?: UsdtPaymentOrder[];
+        error?: string;
+      }>(res, 'Payment submission failed. Please try again.');
       if (!res.ok) {
         throw new Error(payload?.error || 'Payment submission failed.');
       }
@@ -397,7 +436,13 @@ export function usePlatformAuth(isAdminRoute: boolean) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
     });
-    const payload = await res.json();
+    const payload = await safeReadJson<{
+      user?: UserAccountPublic;
+      ledger?: CoinLedgerEntry[];
+      orders?: UsdtPaymentOrder[];
+      message?: string;
+      error?: string;
+    }>(res, 'Voucher redemption failed. Please try again.');
     if (!res.ok) {
       throw new Error(payload?.error || 'Voucher redemption failed.');
     }

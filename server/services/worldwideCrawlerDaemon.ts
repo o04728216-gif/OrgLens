@@ -455,6 +455,7 @@ async function crawlConfirmedEmailsStep(): Promise<number> {
 
 export async function runCrawlerCycleNow(options?: {
   burstPages?: number;
+  manualTrigger?: boolean;
 }): Promise<{ companiesIndexed: number; confirmedEmailsFound: number }> {
   if (activeCycle) {
     return { companiesIndexed: 0, confirmedEmailsFound: 0 };
@@ -464,6 +465,9 @@ export async function runCrawlerCycleNow(options?: {
   let companiesIndexed = 0;
   let confirmedEmailsFound = 0;
   const loops = Math.max(1, Math.min(5, options?.burstPages || 1));
+  const currentVaultSize = getVaultSummaryCounts().vaultCompaniesCount;
+  const skipHeavyBulkCsv =
+    !options?.manualTrigger && currentVaultSize >= 500_000;
 
   try {
     for (let i = 0; i < loops; i++) {
@@ -477,7 +481,7 @@ export async function runCrawlerCycleNow(options?: {
         crawlUsCorporateRegistriesStep(),
         crawlAustraliaAndTechRegistriesStep(),
         crawlOpenAlexAndRorStep(),
-        crawlMajesticAndTrancoStep(),
+        skipHeavyBulkCsv ? Promise.resolve(0) : crawlMajesticAndTrancoStep(),
         crawlConfirmedEmailsStep(),
       ]);
 
@@ -507,18 +511,23 @@ export async function runCrawlerCycleNow(options?: {
   return { companiesIndexed, confirmedEmailsFound };
 }
 
-function scheduleNextDaemonTick(delayMs = 75_000): void {
+function scheduleNextDaemonTick(delayMs?: number): void {
   if (daemonTimer) {
     clearTimeout(daemonTimer);
     daemonTimer = null;
   }
   if (!daemonEnabled) return;
 
+  const existingCount = getVaultSummaryCounts().vaultCompaniesCount;
+  const defaultIntervalMs = existingCount >= 250_000 ? 15 * 60_000 : 90_000;
+  const effectiveDelay =
+    typeof delayMs === 'number' ? delayMs : defaultIntervalMs;
+
   daemonTimer = setTimeout(async () => {
     if (!daemonEnabled) return;
     // Yield 100% of network, CPU, and SQLite I/O while a user is actively querying
-    if (Date.now() - lastUserActivityAt < 25_000) {
-      scheduleNextDaemonTick(30_000);
+    if (Date.now() - lastUserActivityAt < 60_000) {
+      scheduleNextDaemonTick(60_000);
       return;
     }
     try {
@@ -527,23 +536,26 @@ function scheduleNextDaemonTick(delayMs = 75_000): void {
       // Non-fatal background tick
     }
     if (daemonEnabled) {
-      scheduleNextDaemonTick(75_000);
+      scheduleNextDaemonTick();
     }
-  }, delayMs);
+  }, effectiveDelay);
 }
 
 export function startWorldwideCrawlerDaemon(): void {
   daemonEnabled = true;
   const existingVaultCount = getVaultSummaryCounts().vaultCompaniesCount;
   const isFreshVault = existingVaultCount < 500;
+  const isLargeVault = existingVaultCount >= 250_000;
 
-  scheduleNextDaemonTick(isFreshVault ? 35_000 : 25_000);
+  scheduleNextDaemonTick(
+    isFreshVault ? 35_000 : isLargeVault ? 10 * 60_000 : 60_000
+  );
   void (async () => {
     try {
       await new Promise((resolve) =>
-        setTimeout(resolve, isFreshVault ? 2_000 : 18_000)
+        setTimeout(resolve, isFreshVault ? 2_000 : 45_000)
       );
-      if (isFreshVault || Date.now() - lastUserActivityAt >= 15_000) {
+      if (isFreshVault || Date.now() - lastUserActivityAt >= 30_000) {
         await probeGlobalRegistryFederationTotals();
       }
       if (isFreshVault) {

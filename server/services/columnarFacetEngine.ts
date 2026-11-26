@@ -1260,7 +1260,7 @@ export async function buildColumnarFacetIndexAsync(
       const isGeneralDictTemp: number[] = [];
       const locCountryCodeCache = new Map<string, number>();
 
-      const CHUNK_SIZE = 20_000;
+      const CHUNK_SIZE = 8_000;
       const chunkStmt = db.prepare(`
         SELECT rowid AS _rowid, slug, domain, location, country_slug, industry_lower,
                employee_range, revenue_range, source_registry, confirmed_email_count
@@ -1407,8 +1407,8 @@ export async function buildColumnarFacetIndexAsync(
           idx++;
         }
 
-        // Yield to the Node.js event loop after every chunk so Vite & HTTP stay instant!
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        // Yield to the libuv I/O poll phase after every chunk so Vite & HTTP stay < 20ms!
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
         if (batch.length < CHUNK_SIZE) break;
       }
 
@@ -1435,7 +1435,7 @@ export async function buildColumnarFacetIndexAsync(
         tldMask[dst] = tmpTld[i];
       }
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
       const { rowWeight, actualTotal } = buildCalibratedRowWeights(
         countryCode,

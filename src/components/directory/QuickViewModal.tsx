@@ -18,16 +18,41 @@ import {
   X,
 } from 'lucide-react';
 import type { GlobalCompanyItem, SearchResponse } from '../../types.ts';
-import { apiFetch } from '../../utils/authClient.ts';
+import { apiFetch, safeReadJson } from '../../utils/authClient.ts';
 import { copyTextToClipboard } from '../../utils/offlineStorage.ts';
 import { truncateIndustry20 } from '../../utils/emailFormulas.ts';
-import { sanitizeRevenueDisplay } from '../../utils/geographyAndRevenue.ts';
 import { CompanyLogoAvatar } from './CompanyLogoAvatar.tsx';
 
 export type QuickViewTarget = {
   kind: 'company';
   company: GlobalCompanyItem;
 };
+
+const VALID_SINGLE_REVENUE_RE =
+  /^(?:<\s*)?[\$€£]\s*\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\s*(?:trillion|billion|million|thousand|bn|mn|T|B|M|K)\b\+?$/i;
+
+function sanitizeQuickViewRevenue(raw?: string | null): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.replace(/\s+/g, ' ').trim();
+  if (!trimmed || trimmed.length > 40) return null;
+  if (/[,;]\s*$/.test(trimmed)) return null;
+
+  const rangeParts = trimmed.split(/\s*(?:-|–|—)\s*/);
+  if (rangeParts.length === 2) {
+    if (
+      VALID_SINGLE_REVENUE_RE.test(rangeParts[0].trim()) &&
+      VALID_SINGLE_REVENUE_RE.test(rangeParts[1].trim())
+    ) {
+      return `${rangeParts[0].trim()} - ${rangeParts[1].trim()}`;
+    }
+    return null;
+  }
+
+  const currencySymbols = trimmed.match(/[\$€£]/g) || [];
+  if (currencySymbols.length !== 1) return null;
+  if (!VALID_SINGLE_REVENUE_RE.test(trimmed)) return null;
+  return trimmed;
+}
 
 interface QuickViewModalProps {
   target: QuickViewTarget | null;
@@ -109,14 +134,14 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
 
     void apiFetch(`/api/quickview?${qs.toString()}`)
       .then(async (res: Response) => {
-        const data = await res.json();
+        const data = await safeReadJson<
+          SearchResponse & { totalEmployeesCount?: number; error?: string }
+        >(res, 'Could not load company QuickView. Please try again.');
         if (cancelled) return;
         if (!res.ok) {
           throw new Error(data?.error || 'Could not load company QuickView.');
         }
-        setCompanyPreview(
-          data as SearchResponse & { totalEmployeesCount?: number }
-        );
+        setCompanyPreview(data);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -157,9 +182,8 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
     comp.employeeRange ||
     '—';
   const effectiveRevenue =
-    sanitizeRevenueDisplay(companyPreview?.zoomInfoIntel?.revenue) ||
-    sanitizeRevenueDisplay(companyPreview?.revenueRange) ||
-    sanitizeRevenueDisplay(comp.revenueRange) ||
+    sanitizeQuickViewRevenue(companyPreview?.zoomInfoIntel?.revenue) ||
+    companyPreview?.revenueRange ||
     comp.revenueRange ||
     '—';
   const effectivePattern =

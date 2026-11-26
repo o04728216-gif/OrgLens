@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { GlobalCompanyItem } from '../../types';
-import { apiFetch } from '../../utils/authClient';
+import { apiFetch, safeReadJson } from '../../utils/authClient';
 import { truncateIndustry20 } from '../../utils/emailFormulas';
 import { CompanyLogoAvatar } from '../directory/CompanyLogoAvatar';
 
@@ -221,7 +221,10 @@ export const TopBarQuickSearch: React.FC<TopBarQuickSearchProps> = ({
         if (!res.ok) {
           throw new Error(`Quick search failed (${res.status})`);
         }
-        const data = (await res.json()) as QuickSearchApiResponse;
+        const data = await safeReadJson<QuickSearchApiResponse>(
+          res,
+          'Quick search temporarily unavailable.'
+        );
         if (controller.signal.aborted) return;
 
         const companies = Array.isArray(data.companies)
